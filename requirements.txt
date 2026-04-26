@@ -1,0 +1,2 @@
+wxauto; platform_system == "Windows"
+

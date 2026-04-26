@@ -1,10 +1,7 @@
-import wxauto
-from wxauto import WeChat
+from __future__ import annotations
 
-wx = WeChat()
+from main import main
 
-#wx.SendMsg("hi","文件传输助手")
 
-msgs = wx.GetAllMessage()
-for msg in msgs:
-    print(f'消息内容:{msg.comtent},消息类型:{msg.type}')
+if __name__ == "__main__":
+    raise SystemExit(main(["run"]))
