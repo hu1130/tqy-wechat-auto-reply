@@ -24,18 +24,28 @@ class WeChatAutoReplyBot:
         chat_names = self.config.wechat_listen_chats or ["文件传输助手"]
 
         self._log(f"Listening chats: {', '.join(chat_names)}")
+        self._log(f"LLM: {self.config.llm_provider} / {self.config.llm_model}")
         if self.config.dry_run:
             self._log("Dry-run mode is ON. Replies will not be sent.")
+        else:
+            self._log("Live mode is ON. Replies will be sent to WeChat.")
 
         for chat_name in chat_names:
-            wx.AddListenChat(chat_name, self._on_message)
+            try:
+                wx.AddListenChat(chat_name, self._on_message)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to listen to chat {chat_name!r}. Make sure the chat exists and is visible in WeChat."
+                ) from exc
 
+        self._log("Bot is running. Press Ctrl+C to stop.")
         wx.KeepRunning()
 
     def _create_wechat_client(self) -> Any:
         if platform.system() != "Windows":
             raise RuntimeError(
-                "Real WeChat auto-reply requires Windows desktop WeChat because wxauto only supports Windows."
+                "Real WeChat auto-reply requires Windows desktop WeChat because wxauto only supports Windows. "
+                "Run this project on Windows, then execute `python main.py doctor`."
             )
         try:
             from wxauto import WeChat
@@ -63,7 +73,12 @@ class WeChatAutoReplyBot:
         history = self.histories[chat_name]
         append_history(history, role="user", sender=sender or chat_name, content=content)
 
-        reply = self.llm_client.generate_reply(chat_name=chat_name, history=list(history)).strip()
+        try:
+            reply = self.llm_client.generate_reply(chat_name=chat_name, history=list(history)).strip()
+        except RuntimeError as exc:
+            self._log(f"LLM error for {chat_name}: {exc}")
+            return
+
         if not reply:
             self._log(f"LLM returned empty reply for {chat_name}")
             return
@@ -73,7 +88,11 @@ class WeChatAutoReplyBot:
             self._log(f"[dry-run] Reply to {chat_name}: {reply}")
             return
 
-        chat.SendMsg(reply)
+        try:
+            chat.SendMsg(reply)
+        except Exception as exc:
+            self._log(f"Failed to send reply to {chat_name}: {exc}")
+            return
         self._log(f"Sent reply to {chat_name}: {reply}")
 
     def _is_self_message(self, msg: Any, sender: str) -> bool:
@@ -95,4 +114,3 @@ class WeChatAutoReplyBot:
     def _log(message: str) -> None:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"[{now}] {message}", flush=True)
-

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 import json
 from typing import Any
 from urllib import request, error
@@ -84,10 +83,11 @@ class LLMClient:
             body = exc.read().decode("utf-8", errors="ignore")
             raise RuntimeError(f"HTTP {exc.code} when calling {url}: {body}") from exc
         except error.URLError as exc:
-            raise RuntimeError(f"Failed to call {url}: {exc}") from exc
+            raise RuntimeError(
+                f"Failed to call {url}: {exc}. Run `python main.py doctor` to check your LLM settings."
+            ) from exc
 
         try:
             return json.loads(raw)
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"Invalid JSON response from {url}: {raw[:500]}") from exc
-

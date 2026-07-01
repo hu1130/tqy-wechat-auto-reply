@@ -6,38 +6,66 @@ import sys
 
 from wechat_ai.bot import WeChatAutoReplyBot
 from wechat_ai.config import load_config
+from wechat_ai.doctor import run_doctor
 from wechat_ai.llm import LLMClient
+from wechat_ai.wizard import init_env
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="WeChat AI auto-reply bot")
+    parser.add_argument("--env", default=".env", help="Path to env file, default: .env")
     subparsers = parser.add_subparsers(dest="command")
 
     run_parser = subparsers.add_parser("run", help="Run WeChat auto-reply bot")
-    run_parser.add_argument("--dry-run", action="store_true", help="Generate replies without sending them")
+    mode_group = run_parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--dry-run", action="store_true", help="Generate replies without sending them")
+    mode_group.add_argument("--live", action="store_true", help="Send replies to WeChat, overriding DRY_RUN")
+    run_parser.add_argument(
+        "--chat",
+        action="append",
+        dest="chats",
+        help="Chat name to listen to. Can be passed multiple times.",
+    )
 
     demo_parser = subparsers.add_parser("demo", help="Test LLM reply generation only")
+    demo_parser.add_argument("--chat", default="demo", help="Chat name to use in the prompt")
     demo_parser.add_argument("question", nargs="+", help="Question to send to the LLM")
 
     subparsers.add_parser("config", help="Print loaded config")
+
+    init_parser = subparsers.add_parser("init", help="Create a friendly .env file")
+    init_parser.add_argument("--force", action="store_true", help="Overwrite existing env file")
+    init_parser.add_argument("--yes", action="store_true", help="Use defaults without prompting")
+
+    doctor_parser = subparsers.add_parser("doctor", help="Check whether the bot can run")
+    doctor_parser.add_argument("--skip-llm", action="store_true", help="Do not check the LLM endpoint")
     return parser
 
 
-def run_demo(question: str) -> int:
-    config = load_config()
+def run_demo(question: str, env_path: str, chat_name: str) -> int:
+    config = load_config(env_path)
     client = LLMClient(config)
     answer = client.generate_reply(
-        chat_name="demo",
+        chat_name=chat_name,
         history=[{"role": "user", "content": question, "sender": "user"}],
     )
     print(answer)
     return 0
 
 
-def run_wechat_bot(force_dry_run: bool = False) -> int:
-    config = load_config()
+def run_wechat_bot(
+    env_path: str,
+    force_dry_run: bool = False,
+    force_live: bool = False,
+    chats: list[str] | None = None,
+) -> int:
+    config = load_config(env_path)
     if force_dry_run:
         config = config.with_overrides(dry_run=True)
+    if force_live:
+        config = config.with_overrides(dry_run=False)
+    if chats:
+        config = config.with_overrides(wechat_listen_chats=chats)
 
     bot = WeChatAutoReplyBot(config=config, llm_client=LLMClient(config))
     bot.start()
@@ -50,15 +78,27 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "demo":
-            return run_demo(" ".join(args.question))
+            return run_demo(" ".join(args.question), env_path=args.env, chat_name=args.chat)
 
         if args.command == "config":
-            config = load_config()
+            config = load_config(args.env)
             print(json.dumps(config.to_public_dict(), ensure_ascii=False, indent=2))
             return 0
 
-        dry_run = bool(getattr(args, "dry_run", False))
-        return run_wechat_bot(force_dry_run=dry_run)
+        if args.command == "init":
+            path = init_env(args.env, force=args.force, yes=args.yes)
+            print(f"Created {path}. Run `python main.py doctor` before starting the bot.")
+            return 0
+
+        if args.command == "doctor":
+            return run_doctor(env_path=args.env, check_llm_endpoint=not args.skip_llm)
+
+        return run_wechat_bot(
+            env_path=args.env,
+            force_dry_run=bool(getattr(args, "dry_run", False)),
+            force_live=bool(getattr(args, "live", False)),
+            chats=getattr(args, "chats", None),
+        )
     except RuntimeError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
