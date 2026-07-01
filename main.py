@@ -12,7 +12,7 @@ from wechat_ai.wizard import init_env
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="WeChat AI auto-reply bot")
+    parser = argparse.ArgumentParser(description="tqy-wechat-auto-reply")
     parser.add_argument("--env", default=".env", help="Path to env file, default: .env")
     subparsers = parser.add_subparsers(dest="command")
 

@@ -1,4 +1,4 @@
-# WeChat AI Auto Reply
+# tqy-wechat-auto-reply
 
 一个本地运行的微信 AI 自动回复工具。
 
@@ -19,7 +19,7 @@ Windows 微信桌面端
         |
       wxauto
         |
-  WeChat AI Auto Reply
+  tqy-wechat-auto-reply
         |
   最近聊天上下文 + 系统提示词
         |
@@ -165,7 +165,7 @@ python main.py run --live
 ## 项目结构
 
 ```text
-wechat-ai/
+tqy-wechat-auto-reply/
 ├── main.py                 # CLI 入口
 ├── demo.py                 # LLM-only 快速测试
 ├── wxdemo.py               # 兼容旧入口

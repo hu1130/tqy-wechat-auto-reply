@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-Write-Host "== WeChat AI setup =="
+Write-Host "== tqy-wechat-auto-reply setup =="
 
 try {
   py -3.11 --version | Out-Null

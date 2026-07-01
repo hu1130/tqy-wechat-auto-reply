@@ -1,2 +1,1 @@
-"""Core package for the restored WeChat AI auto-reply project."""
-
+"""Core package for tqy-wechat-auto-reply."""
