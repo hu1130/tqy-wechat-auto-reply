@@ -15,8 +15,25 @@ def strip_think_tags(text: str) -> str:
     return cleaned.strip()
 
 
-def build_history_prompt(system_prompt: str, chat_name: str, history: list[dict[str, str]]) -> str:
+def build_history_prompt(
+    system_prompt: str,
+    chat_name: str,
+    history: list[dict[str, str]],
+    knowledge_context: str = "",
+    knowledge_fallback_reply: str = "",
+) -> str:
     lines = [system_prompt, "", f"当前聊天对象: {chat_name}", "最近消息:"]
+    if knowledge_context:
+        lines.extend(
+            [
+                "",
+                "公司知识库摘录:",
+                knowledge_context,
+                "",
+                "只能基于公司知识库摘录和聊天上下文回复。"
+                f"如果资料不足，回复：{knowledge_fallback_reply or '我确认后回复你。'}",
+            ]
+        )
     for item in history:
         role = item.get("role", "user")
         sender = item.get("sender", role)

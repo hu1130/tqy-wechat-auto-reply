@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 import os
+
+ALLOWED_CHAT_POLICIES = {"auto", "manual", "dry_run", "ignore"}
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是一个微信聊天助手。请根据最近上下文，生成自然、简短、像真人发送的中文回复。"
@@ -21,6 +23,35 @@ DEFAULT_ENV_VALUES = {
     "MAX_CONTEXT_MESSAGES": "8",
     "DEDUP_WINDOW_SECONDS": "60",
     "DRY_RUN": "1",
+    "REPLY_ALLOWED_CHATS": "文件传输助手",
+    "REPLY_BLOCKED_CHATS": "",
+    "REPLY_ALLOWED_SENDERS": "",
+    "REPLY_BLOCKED_SENDERS": "",
+    "TEXT_MESSAGE_TYPES": "text,friend",
+    "SENSITIVE_KEYWORDS": "转账,付款,收款,验证码,密码,银行卡,身份证,合同,报价,价格,地址,电话,手机号,隐私,发票,退款,投诉",
+    "MAX_REPLY_CHARS": "120",
+    "BLOCKED_REPLY_PATTERNS": "我是AI,作为AI,我不能,无法提供,验证码,密码,银行卡,身份证,转账",
+    "DEFAULT_CHAT_POLICY": "manual",
+    "CHAT_POLICIES": "",
+    "REPLY_COOLDOWN_SECONDS": "30",
+    "REQUIRE_MANUAL_CONFIRM": "1",
+    "MAX_SENDS_PER_RUN": "20",
+    "MAX_SENDS_PER_CHAT": "5",
+    "MAX_SENDS_PER_DAY": "100",
+    "MAX_SENDS_PER_CHAT_PER_DAY": "20",
+    "MAX_ERRORS_BEFORE_PAUSE": "3",
+    "LOG_FILE": "logs/wechat-ai.log",
+    "AUDIT_LOG_FILE": "logs/audit.jsonl",
+    "ALERT_FILE": "logs/alerts.log",
+    "LOG_MAX_BYTES": "10485760",
+    "LOG_BACKUP_COUNT": "5",
+    "HEALTH_FILE": "logs/health.json",
+    "REPORTS_DIR": "reports",
+    "STATE_DB_FILE": "data/wechat-ai.sqlite3",
+    "KNOWLEDGE_FILE": "knowledge/faq.md",
+    "KNOWLEDGE_TOP_K": "3",
+    "REQUIRE_KNOWLEDGE_MATCH": "0",
+    "KNOWLEDGE_FALLBACK_REPLY": "这个问题我需要确认一下，稍后回复你。",
     "SYSTEM_PROMPT": DEFAULT_SYSTEM_PROMPT,
 }
 
@@ -40,6 +71,20 @@ def _load_env_file(path: Path) -> None:
 
 def _split_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _split_mapping(value: str, name: str) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for item in _split_csv(value):
+        if "=" not in item:
+            raise RuntimeError(f"{name} entries must use chat=policy format, got {item!r}")
+        key, raw_value = item.split("=", 1)
+        key = key.strip()
+        raw_value = raw_value.strip()
+        if not key or not raw_value:
+            raise RuntimeError(f"{name} entries must use chat=policy format, got {item!r}")
+        mapping[key] = raw_value
+    return mapping
 
 
 def _get_bool(name: str, default: bool) -> bool:
@@ -81,6 +126,39 @@ def env_template(values: dict[str, str] | None = None) -> str:
             f"DEDUP_WINDOW_SECONDS={merged['DEDUP_WINDOW_SECONDS']}",
             f"DRY_RUN={merged['DRY_RUN']}",
             "",
+            "# Safety guardrails",
+            f"REPLY_ALLOWED_CHATS={merged['REPLY_ALLOWED_CHATS']}",
+            f"REPLY_BLOCKED_CHATS={merged['REPLY_BLOCKED_CHATS']}",
+            f"REPLY_ALLOWED_SENDERS={merged['REPLY_ALLOWED_SENDERS']}",
+            f"REPLY_BLOCKED_SENDERS={merged['REPLY_BLOCKED_SENDERS']}",
+            f"TEXT_MESSAGE_TYPES={merged['TEXT_MESSAGE_TYPES']}",
+            f"SENSITIVE_KEYWORDS={merged['SENSITIVE_KEYWORDS']}",
+            f"MAX_REPLY_CHARS={merged['MAX_REPLY_CHARS']}",
+            f"BLOCKED_REPLY_PATTERNS={merged['BLOCKED_REPLY_PATTERNS']}",
+            f"DEFAULT_CHAT_POLICY={merged['DEFAULT_CHAT_POLICY']}",
+            f"CHAT_POLICIES={merged['CHAT_POLICIES']}",
+            f"REPLY_COOLDOWN_SECONDS={merged['REPLY_COOLDOWN_SECONDS']}",
+            f"REQUIRE_MANUAL_CONFIRM={merged['REQUIRE_MANUAL_CONFIRM']}",
+            f"MAX_SENDS_PER_RUN={merged['MAX_SENDS_PER_RUN']}",
+            f"MAX_SENDS_PER_CHAT={merged['MAX_SENDS_PER_CHAT']}",
+            f"MAX_SENDS_PER_DAY={merged['MAX_SENDS_PER_DAY']}",
+            f"MAX_SENDS_PER_CHAT_PER_DAY={merged['MAX_SENDS_PER_CHAT_PER_DAY']}",
+            f"MAX_ERRORS_BEFORE_PAUSE={merged['MAX_ERRORS_BEFORE_PAUSE']}",
+            f"LOG_FILE={merged['LOG_FILE']}",
+            f"AUDIT_LOG_FILE={merged['AUDIT_LOG_FILE']}",
+            f"ALERT_FILE={merged['ALERT_FILE']}",
+            f"LOG_MAX_BYTES={merged['LOG_MAX_BYTES']}",
+            f"LOG_BACKUP_COUNT={merged['LOG_BACKUP_COUNT']}",
+            f"HEALTH_FILE={merged['HEALTH_FILE']}",
+            f"REPORTS_DIR={merged['REPORTS_DIR']}",
+            f"STATE_DB_FILE={merged['STATE_DB_FILE']}",
+            "",
+            "# Knowledge base",
+            f"KNOWLEDGE_FILE={merged['KNOWLEDGE_FILE']}",
+            f"KNOWLEDGE_TOP_K={merged['KNOWLEDGE_TOP_K']}",
+            f"REQUIRE_KNOWLEDGE_MATCH={merged['REQUIRE_KNOWLEDGE_MATCH']}",
+            f"KNOWLEDGE_FALLBACK_REPLY={merged['KNOWLEDGE_FALLBACK_REPLY']}",
+            "",
             "# Reply style",
             f"SYSTEM_PROMPT={merged['SYSTEM_PROMPT']}",
             "",
@@ -111,6 +189,35 @@ class AppConfig:
     dedup_window_seconds: int
     dry_run: bool
     system_prompt: str
+    reply_allowed_chats: list[str] = field(default_factory=list)
+    reply_blocked_chats: list[str] = field(default_factory=list)
+    reply_allowed_senders: list[str] = field(default_factory=list)
+    reply_blocked_senders: list[str] = field(default_factory=list)
+    text_message_types: list[str] = field(default_factory=lambda: ["text", "friend"])
+    sensitive_keywords: list[str] = field(default_factory=list)
+    max_reply_chars: int = 120
+    blocked_reply_patterns: list[str] = field(default_factory=list)
+    default_chat_policy: str = "manual"
+    chat_policies: dict[str, str] = field(default_factory=dict)
+    reply_cooldown_seconds: int = 30
+    require_manual_confirm: bool = True
+    max_sends_per_run: int = 20
+    max_sends_per_chat: int = 5
+    max_sends_per_day: int = 100
+    max_sends_per_chat_per_day: int = 20
+    max_errors_before_pause: int = 3
+    log_file: str = "logs/wechat-ai.log"
+    audit_log_file: str = "logs/audit.jsonl"
+    alert_file: str = "logs/alerts.log"
+    log_max_bytes: int = 10485760
+    log_backup_count: int = 5
+    health_file: str = "logs/health.json"
+    reports_dir: str = "reports"
+    state_db_file: str = "data/wechat-ai.sqlite3"
+    knowledge_file: str = "knowledge/faq.md"
+    knowledge_top_k: int = 3
+    require_knowledge_match: bool = False
+    knowledge_fallback_reply: str = "这个问题我需要确认一下，稍后回复你。"
 
     def with_overrides(self, **overrides: object) -> "AppConfig":
         return replace(self, **overrides)
@@ -128,6 +235,35 @@ class AppConfig:
             "max_context_messages": self.max_context_messages,
             "dedup_window_seconds": self.dedup_window_seconds,
             "dry_run": self.dry_run,
+            "reply_allowed_chats": self.reply_allowed_chats,
+            "reply_blocked_chats": self.reply_blocked_chats,
+            "reply_allowed_senders": self.reply_allowed_senders,
+            "reply_blocked_senders": self.reply_blocked_senders,
+            "text_message_types": self.text_message_types,
+            "sensitive_keywords": self.sensitive_keywords,
+            "max_reply_chars": self.max_reply_chars,
+            "blocked_reply_patterns": self.blocked_reply_patterns,
+            "default_chat_policy": self.default_chat_policy,
+            "chat_policies": self.chat_policies,
+            "reply_cooldown_seconds": self.reply_cooldown_seconds,
+            "require_manual_confirm": self.require_manual_confirm,
+            "max_sends_per_run": self.max_sends_per_run,
+            "max_sends_per_chat": self.max_sends_per_chat,
+            "max_sends_per_day": self.max_sends_per_day,
+            "max_sends_per_chat_per_day": self.max_sends_per_chat_per_day,
+            "max_errors_before_pause": self.max_errors_before_pause,
+            "log_file": self.log_file,
+            "audit_log_file": self.audit_log_file,
+            "alert_file": self.alert_file,
+            "log_max_bytes": self.log_max_bytes,
+            "log_backup_count": self.log_backup_count,
+            "health_file": self.health_file,
+            "reports_dir": self.reports_dir,
+            "state_db_file": self.state_db_file,
+            "knowledge_file": self.knowledge_file,
+            "knowledge_top_k": self.knowledge_top_k,
+            "require_knowledge_match": self.require_knowledge_match,
+            "knowledge_fallback_reply": self.knowledge_fallback_reply,
             "system_prompt": self.system_prompt,
         }
 
@@ -140,12 +276,39 @@ def validate_config(config: AppConfig) -> list[str]:
         warnings.append("OPENAI_API_KEY is required when LLM_PROVIDER=openai_compatible.")
     if not config.wechat_listen_chats:
         warnings.append("WECHAT_LISTEN_CHATS is empty. At least one chat name is required.")
+    if not config.reply_allowed_chats:
+        warnings.append("REPLY_ALLOWED_CHATS is required. Start with a small whitelist such as 文件传输助手.")
     if config.max_context_messages <= 0:
         warnings.append("MAX_CONTEXT_MESSAGES should be greater than 0.")
     if config.dedup_window_seconds < 0:
         warnings.append("DEDUP_WINDOW_SECONDS should not be negative.")
     if config.request_timeout <= 0:
         warnings.append("REQUEST_TIMEOUT should be greater than 0.")
+    if config.max_reply_chars < 0:
+        warnings.append("MAX_REPLY_CHARS should not be negative.")
+    if config.default_chat_policy not in ALLOWED_CHAT_POLICIES:
+        warnings.append("DEFAULT_CHAT_POLICY should be one of auto, manual, dry_run, ignore.")
+    invalid_policies = sorted(set(config.chat_policies.values()) - ALLOWED_CHAT_POLICIES)
+    if invalid_policies:
+        warnings.append(f"CHAT_POLICIES contains invalid policies: {', '.join(invalid_policies)}.")
+    if config.reply_cooldown_seconds < 0:
+        warnings.append("REPLY_COOLDOWN_SECONDS should not be negative.")
+    if config.max_sends_per_run < 0:
+        warnings.append("MAX_SENDS_PER_RUN should not be negative.")
+    if config.max_sends_per_chat < 0:
+        warnings.append("MAX_SENDS_PER_CHAT should not be negative.")
+    if config.max_sends_per_day < 0:
+        warnings.append("MAX_SENDS_PER_DAY should not be negative.")
+    if config.max_sends_per_chat_per_day < 0:
+        warnings.append("MAX_SENDS_PER_CHAT_PER_DAY should not be negative.")
+    if config.max_errors_before_pause < 0:
+        warnings.append("MAX_ERRORS_BEFORE_PAUSE should not be negative.")
+    if config.log_max_bytes < 0:
+        warnings.append("LOG_MAX_BYTES should not be negative.")
+    if config.log_backup_count < 0:
+        warnings.append("LOG_BACKUP_COUNT should not be negative.")
+    if config.knowledge_top_k < 0:
+        warnings.append("KNOWLEDGE_TOP_K should not be negative.")
     return warnings
 
 
@@ -167,5 +330,70 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         system_prompt=os.getenv(
             "SYSTEM_PROMPT",
             DEFAULT_SYSTEM_PROMPT,
+        ).strip(),
+        reply_allowed_chats=_split_csv(
+            os.getenv("REPLY_ALLOWED_CHATS", DEFAULT_ENV_VALUES["REPLY_ALLOWED_CHATS"])
+        ),
+        reply_blocked_chats=_split_csv(
+            os.getenv("REPLY_BLOCKED_CHATS", DEFAULT_ENV_VALUES["REPLY_BLOCKED_CHATS"])
+        ),
+        reply_allowed_senders=_split_csv(
+            os.getenv("REPLY_ALLOWED_SENDERS", DEFAULT_ENV_VALUES["REPLY_ALLOWED_SENDERS"])
+        ),
+        reply_blocked_senders=_split_csv(
+            os.getenv("REPLY_BLOCKED_SENDERS", DEFAULT_ENV_VALUES["REPLY_BLOCKED_SENDERS"])
+        ),
+        text_message_types=[
+            item.lower()
+            for item in _split_csv(os.getenv("TEXT_MESSAGE_TYPES", DEFAULT_ENV_VALUES["TEXT_MESSAGE_TYPES"]))
+        ],
+        sensitive_keywords=_split_csv(
+            os.getenv("SENSITIVE_KEYWORDS", DEFAULT_ENV_VALUES["SENSITIVE_KEYWORDS"])
+        ),
+        max_reply_chars=_get_int("MAX_REPLY_CHARS", int(DEFAULT_ENV_VALUES["MAX_REPLY_CHARS"])),
+        blocked_reply_patterns=_split_csv(
+            os.getenv("BLOCKED_REPLY_PATTERNS", DEFAULT_ENV_VALUES["BLOCKED_REPLY_PATTERNS"])
+        ),
+        default_chat_policy=os.getenv(
+            "DEFAULT_CHAT_POLICY",
+            DEFAULT_ENV_VALUES["DEFAULT_CHAT_POLICY"],
+        ).strip().lower(),
+        chat_policies={
+            key: value.lower()
+            for key, value in _split_mapping(
+                os.getenv("CHAT_POLICIES", DEFAULT_ENV_VALUES["CHAT_POLICIES"]),
+                "CHAT_POLICIES",
+            ).items()
+        },
+        reply_cooldown_seconds=_get_int(
+            "REPLY_COOLDOWN_SECONDS",
+            int(DEFAULT_ENV_VALUES["REPLY_COOLDOWN_SECONDS"]),
+        ),
+        require_manual_confirm=_get_bool("REQUIRE_MANUAL_CONFIRM", True),
+        max_sends_per_run=_get_int("MAX_SENDS_PER_RUN", int(DEFAULT_ENV_VALUES["MAX_SENDS_PER_RUN"])),
+        max_sends_per_chat=_get_int("MAX_SENDS_PER_CHAT", int(DEFAULT_ENV_VALUES["MAX_SENDS_PER_CHAT"])),
+        max_sends_per_day=_get_int("MAX_SENDS_PER_DAY", int(DEFAULT_ENV_VALUES["MAX_SENDS_PER_DAY"])),
+        max_sends_per_chat_per_day=_get_int(
+            "MAX_SENDS_PER_CHAT_PER_DAY",
+            int(DEFAULT_ENV_VALUES["MAX_SENDS_PER_CHAT_PER_DAY"]),
+        ),
+        max_errors_before_pause=_get_int(
+            "MAX_ERRORS_BEFORE_PAUSE",
+            int(DEFAULT_ENV_VALUES["MAX_ERRORS_BEFORE_PAUSE"]),
+        ),
+        log_file=os.getenv("LOG_FILE", DEFAULT_ENV_VALUES["LOG_FILE"]).strip(),
+        audit_log_file=os.getenv("AUDIT_LOG_FILE", DEFAULT_ENV_VALUES["AUDIT_LOG_FILE"]).strip(),
+        alert_file=os.getenv("ALERT_FILE", DEFAULT_ENV_VALUES["ALERT_FILE"]).strip(),
+        log_max_bytes=_get_int("LOG_MAX_BYTES", int(DEFAULT_ENV_VALUES["LOG_MAX_BYTES"])),
+        log_backup_count=_get_int("LOG_BACKUP_COUNT", int(DEFAULT_ENV_VALUES["LOG_BACKUP_COUNT"])),
+        health_file=os.getenv("HEALTH_FILE", DEFAULT_ENV_VALUES["HEALTH_FILE"]).strip(),
+        reports_dir=os.getenv("REPORTS_DIR", DEFAULT_ENV_VALUES["REPORTS_DIR"]).strip(),
+        state_db_file=os.getenv("STATE_DB_FILE", DEFAULT_ENV_VALUES["STATE_DB_FILE"]).strip(),
+        knowledge_file=os.getenv("KNOWLEDGE_FILE", DEFAULT_ENV_VALUES["KNOWLEDGE_FILE"]).strip(),
+        knowledge_top_k=_get_int("KNOWLEDGE_TOP_K", int(DEFAULT_ENV_VALUES["KNOWLEDGE_TOP_K"])),
+        require_knowledge_match=_get_bool("REQUIRE_KNOWLEDGE_MATCH", False),
+        knowledge_fallback_reply=os.getenv(
+            "KNOWLEDGE_FALLBACK_REPLY",
+            DEFAULT_ENV_VALUES["KNOWLEDGE_FALLBACK_REPLY"],
         ).strip(),
     )

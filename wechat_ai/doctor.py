@@ -10,6 +10,8 @@ from typing import Any
 from urllib import error, request
 
 from wechat_ai.config import AppConfig, load_config, validate_config
+from wechat_ai.knowledge import KnowledgeBase
+from wechat_ai.store import SQLiteStore
 
 
 @dataclass(frozen=True)
@@ -120,6 +122,64 @@ def check_llm(config: AppConfig) -> DoctorCheck:
     )
 
 
+def check_state_db(config: AppConfig) -> DoctorCheck:
+    if not config.state_db_file:
+        return DoctorCheck(
+            "State DB",
+            "warn",
+            "STATE_DB_FILE is empty. Runtime state will not be persisted.",
+            "Set STATE_DB_FILE=data/wechat-ai.sqlite3 for company use.",
+        )
+    try:
+        SQLiteStore(config.state_db_file)
+    except Exception as exc:
+        return DoctorCheck(
+            "State DB",
+            "fail",
+            f"Cannot open {config.state_db_file}: {exc}",
+            "Use a writable local path such as data/wechat-ai.sqlite3.",
+        )
+    return DoctorCheck("State DB", "ok", config.state_db_file)
+
+
+def check_knowledge_base(config: AppConfig) -> DoctorCheck:
+    if not config.knowledge_file:
+        if config.require_knowledge_match:
+            return DoctorCheck(
+                "Knowledge",
+                "fail",
+                "REQUIRE_KNOWLEDGE_MATCH=1 but KNOWLEDGE_FILE is empty.",
+                "Set KNOWLEDGE_FILE to a UTF-8 Markdown FAQ file.",
+            )
+        return DoctorCheck("Knowledge", "warn", "KNOWLEDGE_FILE is empty.")
+    path = Path(config.knowledge_file)
+    if not path.exists():
+        status = "fail" if config.require_knowledge_match else "warn"
+        return DoctorCheck(
+            "Knowledge",
+            status,
+            f"{config.knowledge_file} not found.",
+            "Create the knowledge file before enabling REQUIRE_KNOWLEDGE_MATCH=1.",
+        )
+    try:
+        kb = KnowledgeBase(path)
+    except OSError as exc:
+        return DoctorCheck(
+            "Knowledge",
+            "fail",
+            f"Cannot read {config.knowledge_file}: {exc}",
+            "Make sure the file is UTF-8 and readable.",
+        )
+    if not kb.entries:
+        return DoctorCheck(
+            "Knowledge",
+            "warn",
+            f"{config.knowledge_file} has no usable entries.",
+            "Add Markdown sections with company FAQ content.",
+        )
+    return DoctorCheck("Knowledge", "ok", f"{len(kb.entries)} entries loaded from {config.knowledge_file}.")
+
+
 def render_checks(checks: list[DoctorCheck]) -> str:
     labels = {"ok": "OK", "warn": "WARN", "fail": "FAIL"}
     lines = []
@@ -142,6 +202,8 @@ def run_doctor(env_path: str | Path = ".env", check_llm_endpoint: bool = True) -
         return 1
 
     checks.extend(check_config(config))
+    checks.append(check_state_db(config))
+    checks.append(check_knowledge_base(config))
     checks.append(check_wxauto())
     if check_llm_endpoint:
         checks.append(check_llm(config))

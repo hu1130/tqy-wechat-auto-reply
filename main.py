@@ -4,6 +4,14 @@ import argparse
 import json
 import sys
 
+from wechat_ai.admin import (
+    pause_chat,
+    render_report,
+    render_status,
+    resume_chat,
+    save_daily_report,
+    set_chat_policy,
+)
 from wechat_ai.bot import WeChatAutoReplyBot
 from wechat_ai.config import load_config
 from wechat_ai.doctor import run_doctor
@@ -39,6 +47,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor_parser = subparsers.add_parser("doctor", help="Check whether the bot can run")
     doctor_parser.add_argument("--skip-llm", action="store_true", help="Do not check the LLM endpoint")
+
+    admin_parser = subparsers.add_parser("admin", help="Manage runtime state")
+    admin_subparsers = admin_parser.add_subparsers(dest="admin_command")
+    admin_subparsers.add_parser("status", help="Show persisted chat state")
+
+    pause_parser = admin_subparsers.add_parser("pause", help="Pause one chat")
+    pause_parser.add_argument("chat", help="Chat name to pause")
+    pause_parser.add_argument("--reason", default="manual", help="Pause reason")
+
+    resume_parser = admin_subparsers.add_parser("resume", help="Resume one chat")
+    resume_parser.add_argument("chat", help="Chat name to resume")
+
+    policy_parser = admin_subparsers.add_parser("policy", help="Set one chat policy")
+    policy_parser.add_argument("chat", help="Chat name")
+    policy_parser.add_argument("policy", help="auto, manual, dry_run, or ignore")
+
+    report_parser = admin_subparsers.add_parser("report", help="Show daily audit report")
+    report_parser.add_argument("--date", help="Date in YYYY-MM-DD format, default: today")
+    report_parser.add_argument("--save", action="store_true", help="Save report to REPORTS_DIR")
     return parser
 
 
@@ -72,6 +99,29 @@ def run_wechat_bot(
     return 0
 
 
+def run_admin_command(env_path: str, args: argparse.Namespace) -> int:
+    config = load_config(env_path)
+    if args.admin_command == "status":
+        print(render_status(config))
+        return 0
+    if args.admin_command == "pause":
+        print(pause_chat(config, chat_name=args.chat, reason=args.reason))
+        return 0
+    if args.admin_command == "resume":
+        print(resume_chat(config, chat_name=args.chat))
+        return 0
+    if args.admin_command == "policy":
+        print(set_chat_policy(config, chat_name=args.chat, policy=args.policy))
+        return 0
+    if args.admin_command == "report":
+        if args.save:
+            print(save_daily_report(config, report_date=args.date))
+            return 0
+        print(render_report(config, report_date=args.date))
+        return 0
+    raise RuntimeError("Missing admin command. Use status, pause, resume, policy, or report.")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -92,6 +142,9 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "doctor":
             return run_doctor(env_path=args.env, check_llm_endpoint=not args.skip_llm)
+
+        if args.command == "admin":
+            return run_admin_command(env_path=args.env, args=args)
 
         return run_wechat_bot(
             env_path=args.env,

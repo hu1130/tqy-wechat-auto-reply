@@ -12,18 +12,38 @@ class LLMClient:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
 
-    def generate_reply(self, chat_name: str, history: list[dict[str, str]]) -> str:
+    def generate_reply(
+        self,
+        chat_name: str,
+        history: list[dict[str, str]],
+        knowledge_context: str = "",
+    ) -> str:
         if self.config.llm_provider == "openai_compatible":
-            reply = self._call_openai_compatible(chat_name=chat_name, history=history)
+            reply = self._call_openai_compatible(
+                chat_name=chat_name,
+                history=history,
+                knowledge_context=knowledge_context,
+            )
         else:
-            reply = self._call_ollama(chat_name=chat_name, history=history)
+            reply = self._call_ollama(
+                chat_name=chat_name,
+                history=history,
+                knowledge_context=knowledge_context,
+            )
         return strip_think_tags(reply)
 
-    def _call_ollama(self, chat_name: str, history: list[dict[str, str]]) -> str:
+    def _call_ollama(
+        self,
+        chat_name: str,
+        history: list[dict[str, str]],
+        knowledge_context: str = "",
+    ) -> str:
         prompt = build_history_prompt(
             system_prompt=self.config.system_prompt,
             chat_name=chat_name,
             history=history,
+            knowledge_context=knowledge_context,
+            knowledge_fallback_reply=self.config.knowledge_fallback_reply,
         )
         payload = {
             "model": self.config.llm_model,
@@ -37,11 +57,27 @@ class LLMClient:
         )
         return str(response.get("response", "")).strip()
 
-    def _call_openai_compatible(self, chat_name: str, history: list[dict[str, str]]) -> str:
+    def _call_openai_compatible(
+        self,
+        chat_name: str,
+        history: list[dict[str, str]],
+        knowledge_context: str = "",
+    ) -> str:
         if not self.config.openai_api_key:
             raise RuntimeError("OPENAI_API_KEY is required when LLM_PROVIDER=openai_compatible")
 
         messages: list[dict[str, str]] = [{"role": "system", "content": self.config.system_prompt}]
+        if knowledge_context:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "公司知识库摘录如下。只能基于这些资料和聊天上下文回复。"
+                        f"如果资料不足，回复：{self.config.knowledge_fallback_reply}\n\n"
+                        f"{knowledge_context}"
+                    ),
+                }
+            )
         for item in history:
             role = item.get("role", "user")
             content = item.get("content", "").strip()
