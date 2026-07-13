@@ -64,6 +64,69 @@ start_live.bat
 
 `start_live.bat` 会要求你手动输入 `YES`，避免误触发真实回复。
 
+## 全新电脑一键下载测试
+
+目标电脑要求：
+
+- Windows 10/11
+- 能访问 GitHub
+- 已安装并登录 Windows 桌面微信
+- 如果仓库是 private，需要能登录 GitHub 账号 `hu1130`
+
+### private 仓库推荐流程
+
+在全新电脑打开 PowerShell，先安装并登录 GitHub CLI：
+
+```powershell
+winget install --id GitHub.cli -e --source winget
+gh auth login
+```
+
+然后下载并运行 bootstrap：
+
+```powershell
+$token = gh auth token
+$headers = @{ Authorization = "Bearer $token" }
+irm -Headers $headers https://raw.githubusercontent.com/hu1130/tqy-wechat-auto-reply/main/bootstrap_clean_windows.ps1 -OutFile bootstrap_clean_windows.ps1
+powershell -ExecutionPolicy Bypass -File .\bootstrap_clean_windows.ps1
+```
+
+脚本会自动做这些事：
+
+- 安装/检查 Python 3.11
+- 安装/检查 Git
+- 克隆或更新 `https://github.com/hu1130/tqy-wechat-auto-reply.git`
+- 创建 `.venv`
+- 安装 `requirements.txt`
+- 生成安全默认 `.env`
+- 跑完整单元测试
+- 跑 `doctor --skip-llm`
+
+默认安装目录：
+
+```text
+%USERPROFILE%\Documents\tqy-wechat-auto-reply
+```
+
+如果你已经从 GitHub 下载 zip 并解压，也可以直接双击：
+
+```bat
+test_environment.bat
+```
+
+或手动运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup_test_environment.ps1
+```
+
+通过后先测试 dry-run：
+
+```powershell
+cd "$env:USERPROFILE\Documents\tqy-wechat-auto-reply"
+.\.venv\Scripts\python.exe main.py run --dry-run --chat 文件传输助手
+```
+
 ## 手动安装
 
 ```powershell
@@ -285,6 +348,9 @@ tqy-wechat-auto-reply/
 ├── main.py                 # CLI 入口
 ├── demo.py                 # LLM-only 快速测试
 ├── wxdemo.py               # 兼容旧入口
+├── bootstrap_clean_windows.ps1 # 全新电脑下载和测试入口
+├── setup_test_environment.ps1  # 本地环境创建和测试脚本
+├── test_environment.bat    # zip 解压后的双击测试入口
 ├── setup_windows.ps1       # Windows 安装脚本
 ├── start_dry_run.bat       # Windows dry-run 启动脚本
 ├── start_live.bat          # Windows 真实发送启动脚本
