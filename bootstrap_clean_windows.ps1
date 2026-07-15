@@ -21,7 +21,7 @@ function Refresh-Path {
 
 function Ensure-Windows {
   if ($env:OS -ne "Windows_NT") {
-    throw "This project requires Windows desktop WeChat and wxauto. Run this script on Windows."
+    throw "This project requires Windows desktop WeChat 4.x and wxauto4. Run this script on Windows."
   }
 }
 

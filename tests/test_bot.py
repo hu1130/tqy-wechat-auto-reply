@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import patch
 
 from wechat_ai.bot import WeChatAutoReplyBot
@@ -47,6 +49,14 @@ class FakeChat:
         self.sent.append(message)
 
 
+class FakeWeChatClient:
+    def AddListenChat(self, chat_name: str, callback: object) -> None:
+        pass
+
+    def KeepRunning(self) -> None:
+        pass
+
+
 def make_config(**overrides: object) -> AppConfig:
     config = AppConfig(
         llm_provider="ollama",
@@ -73,6 +83,44 @@ def make_config(**overrides: object) -> AppConfig:
 
 
 class BotSafetyTests(unittest.TestCase):
+    def test_create_wechat_client_uses_wxauto4_listener_api(self) -> None:
+        module = ModuleType("wxauto4")
+        module.WeChat = FakeWeChatClient
+        bot = WeChatAutoReplyBot(config=make_config(), llm_client=FakeLLM())
+
+        with patch("wechat_ai.bot.platform.system", return_value="Windows"):
+            with patch.dict(sys.modules, {"wxauto4": module}):
+                client = bot._create_wechat_client()
+
+        self.assertIsInstance(client, FakeWeChatClient)
+
+    def test_create_wechat_client_rejects_package_without_listener_api(self) -> None:
+        class IncompleteWeChatClient:
+            pass
+
+        module = ModuleType("wxauto4")
+        module.WeChat = IncompleteWeChatClient
+        bot = WeChatAutoReplyBot(config=make_config(), llm_client=FakeLLM())
+
+        with patch("wechat_ai.bot.platform.system", return_value="Windows"):
+            with patch.dict(sys.modules, {"wxauto4": module}):
+                with self.assertRaisesRegex(RuntimeError, "required listener methods"):
+                    bot._create_wechat_client()
+
+    def test_create_wechat_client_reports_blocked_native_import(self) -> None:
+        bot = WeChatAutoReplyBot(config=make_config(), llm_client=FakeLLM())
+        original_import = __import__
+
+        def import_with_blocked_wxauto4(name: str, *args: object, **kwargs: object) -> object:
+            if name == "wxauto4":
+                raise ImportError("DLL blocked")
+            return original_import(name, *args, **kwargs)
+
+        with patch("wechat_ai.bot.platform.system", return_value="Windows"):
+            with patch("builtins.__import__", side_effect=import_with_blocked_wxauto4):
+                with self.assertRaisesRegex(RuntimeError, "could not load its native Windows components"):
+                    bot._create_wechat_client()
+
     def test_dry_run_generates_without_sending(self) -> None:
         chat = FakeChat()
         llm = FakeLLM()

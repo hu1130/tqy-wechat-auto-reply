@@ -89,24 +89,41 @@ class WeChatAutoReplyBot:
     def _create_wechat_client(self) -> Any:
         if platform.system() != "Windows":
             raise RuntimeError(
-                "Real WeChat auto-reply requires Windows desktop WeChat because wxauto only supports Windows. "
+                "Real WeChat auto-reply requires Windows desktop WeChat because wxauto4 only supports Windows. "
                 "Run this project on Windows, then execute `python main.py doctor`."
             )
         try:
-            from wxauto import WeChat
+            from wxauto4 import WeChat
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "wxauto4 is not installed. Run `pip install -r requirements.txt` on Windows."
+            ) from exc
         except ImportError as exc:
             raise RuntimeError(
-                "wxauto is not installed. Run `pip install -r requirements.txt` on Windows."
+                "wxauto4 is installed but could not load its native Windows components. "
+                "Verify 64-bit Python and a supported WeChat 4.x version. If Windows application control blocks "
+                "the package, ask the device administrator to approve it; do not disable or bypass the policy. "
+                f"Original error: {exc}"
             ) from exc
         try:
-            return WeChat()
+            client = WeChat()
+            missing_methods = [
+                method_name
+                for method_name in ("AddListenChat", "KeepRunning")
+                if not callable(getattr(client, method_name, None))
+            ]
+            if missing_methods:
+                raise RuntimeError(
+                    "Installed wxauto4 does not expose the required listener methods: "
+                    f"{', '.join(missing_methods)}."
+                )
+            return client
         except Exception as exc:
             raise RuntimeError(
-                "Failed to attach to Windows desktop WeChat. "
-                "wxauto expects the classic Windows desktop WeChat 3.9.x main window "
-                "(window class WeChatMainWndForPC). Open and log in to WeChat, keep the main window visible, "
-                "avoid the new Weixin/WeChat 4.x window used by WeChatAppEx, and run this command with the "
-                f"same privilege level as WeChat. Original error: {exc}"
+                "Failed to attach to Windows desktop WeChat 4.x with wxauto4. "
+                "Open and log in to the current Weixin client, keep its main window visible, and run this "
+                "command with the same privilege level as WeChat. wxauto4 is a version-sensitive test adapter; "
+                f"a newer WeChat build can require an updated wxauto4 package. Original error: {exc}"
             ) from exc
 
     def _on_message(self, msg: Any, chat: Any) -> None:

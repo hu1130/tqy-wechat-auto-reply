@@ -28,7 +28,7 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("unittest discover -s tests -v", text)
         self.assertIn("main.py doctor --skip-llm", text)
         self.assertIn("main.py simulate --reply", text)
-        self.assertIn("github.com/cluic/wxauto", requirements)
+        self.assertIn("wxauto4==41.1.2", requirements)
 
     def test_batch_wrapper_runs_setup_script(self) -> None:
         text = (ROOT / "test_environment.bat").read_text(encoding="utf-8")

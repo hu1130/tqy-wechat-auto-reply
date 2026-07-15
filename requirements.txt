@@ -1,2 +1,2 @@
-wxauto @ https://github.com/cluic/wxauto/archive/refs/heads/main.zip ; platform_system == "Windows"
+wxauto4==41.1.2 ; platform_system == "Windows"
 

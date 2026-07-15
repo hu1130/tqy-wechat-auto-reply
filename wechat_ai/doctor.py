@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import ctypes
+import csv
+import importlib
 import importlib.util
 import json
 import platform
+import subprocess
 import sys
 from typing import Any
 from urllib import error, request
@@ -64,44 +66,76 @@ def check_config(config: AppConfig) -> list[DoctorCheck]:
     return [DoctorCheck("Config", "fail", item) for item in warnings]
 
 
-def check_wxauto() -> DoctorCheck:
+def check_wxauto4() -> DoctorCheck:
     if platform.system() != "Windows":
         return DoctorCheck(
-            "wxauto",
+            "wxauto4",
             "fail",
-            "wxauto is only useful on Windows for this project.",
+            "wxauto4 is only useful on Windows for this project.",
             "Run this project on Windows and install dependencies with `pip install -r requirements.txt`.",
         )
-    if importlib.util.find_spec("wxauto") is not None:
-        return DoctorCheck("wxauto", "ok", "wxauto is installed.")
-    return DoctorCheck("wxauto", "fail", "wxauto is not installed.", "Run `pip install -r requirements.txt`.")
+    if importlib.util.find_spec("wxauto4") is not None:
+        try:
+            importlib.import_module("wxauto4")
+        except Exception as exc:
+            return DoctorCheck(
+                "wxauto4",
+                "fail",
+                f"wxauto4 is installed but could not be imported: {exc}",
+                "Verify 64-bit Python and a supported WeChat 4.x version. If Windows application control blocks "
+                "wxauto4, ask the device administrator to approve the package; do not disable or bypass the policy.",
+            )
+        return DoctorCheck("wxauto4", "ok", "wxauto4 is installed and importable.")
+    return DoctorCheck("wxauto4", "fail", "wxauto4 is not installed.", "Run `pip install -r requirements.txt`.")
 
 
-def _find_window_by_class(class_name: str) -> int:
+def _list_running_process_names() -> set[str] | None:
     if platform.system() != "Windows":
-        return 0
+        return set()
     try:
-        return int(ctypes.windll.user32.FindWindowW(class_name, None))
-    except Exception:
-        return 0
+        result = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            check=False,
+            encoding="utf-8",
+            errors="replace",
+            text=True,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return {row[0].casefold() for row in csv.reader(result.stdout.splitlines()) if row}
 
 
-def check_wechat_window() -> DoctorCheck:
+def check_wechat_client() -> DoctorCheck:
     if platform.system() != "Windows":
         return DoctorCheck(
-            "WeChat window",
+            "WeChat client",
             "warn",
             "Skipped because this is not Windows.",
+    )
+    process_names = _list_running_process_names()
+    if process_names is None:
+        return DoctorCheck(
+            "WeChat client",
+            "warn",
+            "Could not inspect running Windows processes in this session.",
+            "Run the dry-run command in the same signed-in Windows session as WeChat. "
+            "The bot will verify its own attachment when it starts.",
         )
-    hwnd = _find_window_by_class("WeChatMainWndForPC")
-    if hwnd:
-        return DoctorCheck("WeChat window", "ok", f"class=WeChatMainWndForPC hwnd={hwnd}")
+    for process_name in ("weixin.exe", "wechat.exe"):
+        if process_name in process_names:
+            return DoctorCheck(
+                "WeChat client",
+                "ok",
+                f"Detected running desktop client process: {process_name}.",
+            )
     return DoctorCheck(
-        "WeChat window",
+        "WeChat client",
         "warn",
-        "Classic Windows WeChat main window was not found.",
-        "Open and log in to the classic Windows desktop WeChat 3.9.x main window. "
-        "wxauto does not attach to the new Weixin/WeChat 4.x window used by WeChatAppEx.",
+        "A running Windows WeChat client was not found.",
+        "Open and log in to the current Windows Weixin client, then keep the main window visible before running a dry-run test.",
     )
 
 
@@ -233,8 +267,8 @@ def run_doctor(env_path: str | Path = ".env", check_llm_endpoint: bool = True) -
     checks.extend(check_config(config))
     checks.append(check_state_db(config))
     checks.append(check_knowledge_base(config))
-    checks.append(check_wxauto())
-    checks.append(check_wechat_window())
+    checks.append(check_wxauto4())
+    checks.append(check_wechat_client())
     if check_llm_endpoint:
         checks.append(check_llm(config))
 

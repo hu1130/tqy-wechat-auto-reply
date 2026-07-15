@@ -44,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     simulate_parser = subparsers.add_parser("simulate", help="Run one fake WeChat message through the bot")
     simulate_parser.add_argument("--chat", help="Chat name to simulate, default: first WECHAT_LISTEN_CHATS item")
     simulate_parser.add_argument("--sender", default="simulated-user", help="Sender name to simulate")
-    simulate_parser.add_argument("--type", default="text", dest="msg_type", help="wxauto message type to simulate")
+    simulate_parser.add_argument("--type", default="text", dest="msg_type", help="WeChat adapter message type to simulate")
     simulate_parser.add_argument("--reply", help="Use this fixed reply instead of calling the LLM endpoint")
     simulate_parser.add_argument(
         "--live-path",

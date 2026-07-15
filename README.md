@@ -1,5 +1,15 @@
 # tqy-wechat-auto-reply
 
+## WeChat 4.x Test Edition
+
+This project now uses the `wxauto4` test adapter for the current Windows `Weixin.exe` client. Do not install the discontinued WeChat 3.9.x client.
+
+- The dependency is pinned to `wxauto4==41.1.2` for Windows x64 and Python 3.9 through 3.13.
+- Desktop WeChat updates can change the UI automation surface. Every client version must pass `run --dry-run` before real sending is considered.
+- Run `python main.py doctor --skip-llm`. `wxauto4` must report `[OK]`. A WeChat process warning only means the doctor could not inspect the current session; dry-run is the final attachment check.
+- If Windows application control blocks `wxauto4`, ask the device administrator to review and approve the package. Do not disable or bypass client login, update, or system security controls.
+- Whitelisting, sensitive keyword filtering, cooldowns, send limits, audit logs, and manual confirmation remain enabled. `DRY_RUN=1` remains the default.
+
 一个本地运行的微信 AI 自动回复工具。
 
 它会监听你指定的微信好友或微信群，把最近聊天上下文发给大模型，再把生成的回复发回微信。适合做客服辅助、私域消息初筛、社群答疑、个人微信助理等场景。
