@@ -165,6 +165,13 @@ python main.py init
 python main.py doctor
 ```
 
+如果安装时出现 `No matching distribution found for wxauto`，说明 pip 在 PyPI 查找旧包失败。当前项目的 `requirements.txt` 已改为从 `https://github.com/cluic/wxauto` 的源码包安装，重新执行：
+
+```powershell
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
 如果你只想生成默认 `.env`，不走交互向导：
 
 ```powershell

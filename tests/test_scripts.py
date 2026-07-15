@@ -20,6 +20,7 @@ class ScriptTests(unittest.TestCase):
 
     def test_setup_script_creates_venv_and_runs_safety_checks(self) -> None:
         text = (ROOT / "setup_test_environment.ps1").read_text(encoding="utf-8")
+        requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
 
         self.assertIn('-m", "venv"', text)
         self.assertIn("pip install -r requirements.txt", text)
@@ -27,6 +28,7 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("unittest discover -s tests -v", text)
         self.assertIn("main.py doctor --skip-llm", text)
         self.assertIn("main.py simulate --reply", text)
+        self.assertIn("github.com/cluic/wxauto", requirements)
 
     def test_batch_wrapper_runs_setup_script(self) -> None:
         text = (ROOT / "test_environment.bat").read_text(encoding="utf-8")
