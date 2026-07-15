@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 from wechat_ai.admin import (
     pause_chat,
+    render_pending_replies,
     render_report,
     render_status,
     resume_chat,
@@ -90,6 +92,26 @@ class AdminTests(unittest.TestCase):
 
             self.assertIn("Saved report to", message)
             self.assertTrue(report_path.exists())
+
+    def test_render_pending_replies_reads_recent_queue_items(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "state.sqlite3"
+            pending_path = Path(temp_dir) / "pending.jsonl"
+            config = make_config(str(db_path)).with_overrides(pending_replies_file=str(pending_path))
+            pending_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"ts": "2026-07-11T10:00:00", "chat_name": "old", "reply": "old"}),
+                        json.dumps({"ts": "2026-07-11T10:01:00", "chat_name": "chat", "reply": "new"}),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            output = render_pending_replies(config, limit=1)
+
+        self.assertIn("reply=new", output)
+        self.assertNotIn("reply=old", output)
 
 
 if __name__ == "__main__":

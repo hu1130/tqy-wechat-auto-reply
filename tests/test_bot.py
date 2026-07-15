@@ -166,6 +166,34 @@ class BotSafetyTests(unittest.TestCase):
         self.assertEqual(chat.sent, ["approved"])
         self.assertEqual(bot.sent_count, 1)
 
+    def test_queue_approval_writes_pending_reply_without_sending(self) -> None:
+        chat = FakeChat()
+        llm = FakeLLM(reply="queued reply")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pending_path = Path(temp_dir) / "pending.jsonl"
+            audit_path = Path(temp_dir) / "audit.jsonl"
+            bot = WeChatAutoReplyBot(
+                config=make_config(
+                    dry_run=False,
+                    require_manual_confirm=True,
+                    approval_mode="queue",
+                    pending_replies_file=str(pending_path),
+                    audit_log_file=str(audit_path),
+                ),
+                llm_client=llm,
+            )
+
+            bot._on_message(FakeMessage(), chat)
+
+            pending_events = [json.loads(line) for line in pending_path.read_text(encoding="utf-8").splitlines()]
+            audit_events = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(chat.sent, [])
+        self.assertEqual(bot.sent_count, 0)
+        self.assertEqual(pending_events[-1]["action"], "pending_approval")
+        self.assertEqual(pending_events[-1]["reply"], "queued reply")
+        self.assertEqual(audit_events[-1]["action"], "pending_approval")
+
     def test_send_limit_skips_after_cap(self) -> None:
         chat = FakeChat()
         llm = FakeLLM(reply="limited")

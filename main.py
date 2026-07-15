@@ -6,6 +6,7 @@ import sys
 
 from wechat_ai.admin import (
     pause_chat,
+    render_pending_replies,
     render_report,
     render_status,
     resume_chat,
@@ -16,6 +17,7 @@ from wechat_ai.bot import WeChatAutoReplyBot
 from wechat_ai.config import load_config
 from wechat_ai.doctor import run_doctor
 from wechat_ai.llm import LLMClient
+from wechat_ai.simulator import StaticReplyClient, simulate_message
 from wechat_ai.wizard import init_env
 
 
@@ -39,6 +41,23 @@ def build_parser() -> argparse.ArgumentParser:
     demo_parser.add_argument("--chat", default="demo", help="Chat name to use in the prompt")
     demo_parser.add_argument("question", nargs="+", help="Question to send to the LLM")
 
+    simulate_parser = subparsers.add_parser("simulate", help="Run one fake WeChat message through the bot")
+    simulate_parser.add_argument("--chat", help="Chat name to simulate, default: first WECHAT_LISTEN_CHATS item")
+    simulate_parser.add_argument("--sender", default="simulated-user", help="Sender name to simulate")
+    simulate_parser.add_argument("--type", default="text", dest="msg_type", help="wxauto message type to simulate")
+    simulate_parser.add_argument("--reply", help="Use this fixed reply instead of calling the LLM endpoint")
+    simulate_parser.add_argument(
+        "--live-path",
+        action="store_true",
+        help="Exercise the non-dry-run path with a fake chat object; no real WeChat message is sent",
+    )
+    simulate_parser.add_argument(
+        "--queue",
+        action="store_true",
+        help="Force approval queue mode and write the generated reply to PENDING_REPLIES_FILE",
+    )
+    simulate_parser.add_argument("message", nargs="+", help="Incoming message content to simulate")
+
     subparsers.add_parser("config", help="Print loaded config")
 
     init_parser = subparsers.add_parser("init", help="Create a friendly .env file")
@@ -51,6 +70,8 @@ def build_parser() -> argparse.ArgumentParser:
     admin_parser = subparsers.add_parser("admin", help="Manage runtime state")
     admin_subparsers = admin_parser.add_subparsers(dest="admin_command")
     admin_subparsers.add_parser("status", help="Show persisted chat state")
+    pending_parser = admin_subparsers.add_parser("pending", help="Show queued replies waiting for manual approval")
+    pending_parser.add_argument("--limit", type=int, default=20, help="Number of pending replies to show")
 
     pause_parser = admin_subparsers.add_parser("pause", help="Pause one chat")
     pause_parser.add_argument("chat", help="Chat name to pause")
@@ -99,10 +120,47 @@ def run_wechat_bot(
     return 0
 
 
+def run_simulation(
+    env_path: str,
+    message: str,
+    chat_name: str | None = None,
+    sender: str = "simulated-user",
+    msg_type: str = "text",
+    reply: str | None = None,
+    live_path: bool = False,
+    queue: bool = False,
+) -> int:
+    config = load_config(env_path)
+    effective_chat_name = chat_name or (config.wechat_listen_chats[0] if config.wechat_listen_chats else "demo")
+    overrides: dict[str, object] = {}
+    if queue:
+        overrides.update(dry_run=False, require_manual_confirm=True, approval_mode="queue")
+    elif live_path:
+        overrides.update(dry_run=False, require_manual_confirm=False)
+    else:
+        overrides.update(dry_run=True)
+    config = config.with_overrides(**overrides)
+
+    client = StaticReplyClient(reply) if reply is not None else LLMClient(config)
+    result = simulate_message(
+        config=config,
+        llm_client=client,
+        chat_name=effective_chat_name,
+        sender=sender,
+        msg_type=msg_type,
+        content=message,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def run_admin_command(env_path: str, args: argparse.Namespace) -> int:
     config = load_config(env_path)
     if args.admin_command == "status":
         print(render_status(config))
+        return 0
+    if args.admin_command == "pending":
+        print(render_pending_replies(config, limit=args.limit))
         return 0
     if args.admin_command == "pause":
         print(pause_chat(config, chat_name=args.chat, reason=args.reason))
@@ -119,7 +177,7 @@ def run_admin_command(env_path: str, args: argparse.Namespace) -> int:
             return 0
         print(render_report(config, report_date=args.date))
         return 0
-    raise RuntimeError("Missing admin command. Use status, pause, resume, policy, or report.")
+    raise RuntimeError("Missing admin command. Use status, pending, pause, resume, policy, or report.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -129,6 +187,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "demo":
             return run_demo(" ".join(args.question), env_path=args.env, chat_name=args.chat)
+
+        if args.command == "simulate":
+            return run_simulation(
+                env_path=args.env,
+                message=" ".join(args.message),
+                chat_name=args.chat,
+                sender=args.sender,
+                msg_type=args.msg_type,
+                reply=args.reply,
+                live_path=args.live_path,
+                queue=args.queue,
+            )
 
         if args.command == "config":
             config = load_config(args.env)

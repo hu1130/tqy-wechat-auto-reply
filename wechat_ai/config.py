@@ -5,6 +5,7 @@ from pathlib import Path
 import os
 
 ALLOWED_CHAT_POLICIES = {"auto", "manual", "dry_run", "ignore"}
+ALLOWED_APPROVAL_MODES = {"console", "queue"}
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是一个微信聊天助手。请根据最近上下文，生成自然、简短、像真人发送的中文回复。"
@@ -35,6 +36,8 @@ DEFAULT_ENV_VALUES = {
     "CHAT_POLICIES": "",
     "REPLY_COOLDOWN_SECONDS": "30",
     "REQUIRE_MANUAL_CONFIRM": "1",
+    "APPROVAL_MODE": "console",
+    "PENDING_REPLIES_FILE": "logs/pending_replies.jsonl",
     "MAX_SENDS_PER_RUN": "20",
     "MAX_SENDS_PER_CHAT": "5",
     "MAX_SENDS_PER_DAY": "100",
@@ -139,6 +142,8 @@ def env_template(values: dict[str, str] | None = None) -> str:
             f"CHAT_POLICIES={merged['CHAT_POLICIES']}",
             f"REPLY_COOLDOWN_SECONDS={merged['REPLY_COOLDOWN_SECONDS']}",
             f"REQUIRE_MANUAL_CONFIRM={merged['REQUIRE_MANUAL_CONFIRM']}",
+            f"APPROVAL_MODE={merged['APPROVAL_MODE']}",
+            f"PENDING_REPLIES_FILE={merged['PENDING_REPLIES_FILE']}",
             f"MAX_SENDS_PER_RUN={merged['MAX_SENDS_PER_RUN']}",
             f"MAX_SENDS_PER_CHAT={merged['MAX_SENDS_PER_CHAT']}",
             f"MAX_SENDS_PER_DAY={merged['MAX_SENDS_PER_DAY']}",
@@ -201,6 +206,8 @@ class AppConfig:
     chat_policies: dict[str, str] = field(default_factory=dict)
     reply_cooldown_seconds: int = 30
     require_manual_confirm: bool = True
+    approval_mode: str = "console"
+    pending_replies_file: str = "logs/pending_replies.jsonl"
     max_sends_per_run: int = 20
     max_sends_per_chat: int = 5
     max_sends_per_day: int = 100
@@ -247,6 +254,8 @@ class AppConfig:
             "chat_policies": self.chat_policies,
             "reply_cooldown_seconds": self.reply_cooldown_seconds,
             "require_manual_confirm": self.require_manual_confirm,
+            "approval_mode": self.approval_mode,
+            "pending_replies_file": self.pending_replies_file,
             "max_sends_per_run": self.max_sends_per_run,
             "max_sends_per_chat": self.max_sends_per_chat,
             "max_sends_per_day": self.max_sends_per_day,
@@ -293,6 +302,10 @@ def validate_config(config: AppConfig) -> list[str]:
         warnings.append(f"CHAT_POLICIES contains invalid policies: {', '.join(invalid_policies)}.")
     if config.reply_cooldown_seconds < 0:
         warnings.append("REPLY_COOLDOWN_SECONDS should not be negative.")
+    if config.approval_mode not in ALLOWED_APPROVAL_MODES:
+        warnings.append("APPROVAL_MODE should be either 'console' or 'queue'.")
+    if config.approval_mode == "queue" and not config.pending_replies_file:
+        warnings.append("PENDING_REPLIES_FILE is required when APPROVAL_MODE=queue.")
     if config.max_sends_per_run < 0:
         warnings.append("MAX_SENDS_PER_RUN should not be negative.")
     if config.max_sends_per_chat < 0:
@@ -370,6 +383,11 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
             int(DEFAULT_ENV_VALUES["REPLY_COOLDOWN_SECONDS"]),
         ),
         require_manual_confirm=_get_bool("REQUIRE_MANUAL_CONFIRM", True),
+        approval_mode=os.getenv("APPROVAL_MODE", DEFAULT_ENV_VALUES["APPROVAL_MODE"]).strip().lower(),
+        pending_replies_file=os.getenv(
+            "PENDING_REPLIES_FILE",
+            DEFAULT_ENV_VALUES["PENDING_REPLIES_FILE"],
+        ).strip(),
         max_sends_per_run=_get_int("MAX_SENDS_PER_RUN", int(DEFAULT_ENV_VALUES["MAX_SENDS_PER_RUN"])),
         max_sends_per_chat=_get_int("MAX_SENDS_PER_CHAT", int(DEFAULT_ENV_VALUES["MAX_SENDS_PER_CHAT"])),
         max_sends_per_day=_get_int("MAX_SENDS_PER_DAY", int(DEFAULT_ENV_VALUES["MAX_SENDS_PER_DAY"])),

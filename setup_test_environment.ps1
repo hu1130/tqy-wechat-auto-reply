@@ -84,7 +84,16 @@ if (-not $SkipDoctor) {
   }
 }
 
+Write-Step "Running no-WeChat simulation"
+& $venvPython main.py simulate --reply "ok, received" "hello"
+if ($LASTEXITCODE -ne 0) {
+  throw "No-WeChat simulation failed."
+}
+
 Write-Step "Environment is ready"
+Write-Host "No-WeChat simulation:"
+Write-Host "  .\.venv\Scripts\python.exe main.py simulate --reply `"ok, received`" `"hello`""
+Write-Host ""
 Write-Host "Dry-run test:"
 Write-Host "  .\.venv\Scripts\python.exe main.py run --dry-run --chat 文件传输助手"
 Write-Host ""

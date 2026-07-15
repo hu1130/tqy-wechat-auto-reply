@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from wechat_ai.config import ALLOWED_CHAT_POLICIES, AppConfig
 from wechat_ai.ops import save_report
 from wechat_ai.store import SQLiteStore, format_daily_report
@@ -66,3 +69,33 @@ def save_daily_report(config: AppConfig, report_date: str | None = None) -> str:
     report_text = format_daily_report(summary)
     path = save_report(config.reports_dir, report_text, str(summary["date"]))
     return f"Saved report to {path}"
+
+
+def render_pending_replies(config: AppConfig, limit: int = 20) -> str:
+    if not config.pending_replies_file:
+        return "Pending replies file: (disabled)\n- disabled"
+    path = Path(config.pending_replies_file)
+    lines = [f"Pending replies file: {path}"]
+    if not path.exists():
+        lines.append("- none")
+        return "\n".join(lines)
+
+    raw_items = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not raw_items:
+        lines.append("- none")
+        return "\n".join(lines)
+
+    try:
+        items = [json.loads(line) for line in raw_items[-max(limit, 1) :]]
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Pending replies file is not valid JSONL: {path}: {exc}") from exc
+
+    for item in items:
+        lines.append(
+            "- "
+            f"{item.get('ts', '')} "
+            f"chat={item.get('chat_name', '')} "
+            f"sender={item.get('sender', '')} "
+            f"reply={item.get('reply', '')}"
+        )
+    return "\n".join(lines)

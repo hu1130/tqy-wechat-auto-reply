@@ -42,7 +42,12 @@ class WeChatAutoReplyBot:
         else:
             self._log("Live mode is ON. Replies will be sent to WeChat.")
             if self.config.require_manual_confirm:
-                self._log("Manual confirmation is ON. Each reply requires typing YES before sending.")
+                self._log(
+                    "Manual confirmation is ON. "
+                    f"Approval mode: {self.config.approval_mode}."
+                )
+                if self.config.approval_mode == "queue":
+                    self._log(f"Pending replies will be written to {self.config.pending_replies_file}.")
             else:
                 self._log("Manual confirmation is OFF.")
         if self.config.reply_cooldown_seconds > 0:
@@ -260,20 +265,26 @@ class WeChatAutoReplyBot:
             )
             self._mark_reply_emitted(chat_name, sent=False)
             return
-        if self._requires_manual_confirm(policy) and not self._confirm_send(chat_name, reply):
-            self._log(f"Skipped sending reply to {chat_name}: manual confirmation was not granted.")
-            self._audit(
-                "skip",
-                chat_name=chat_name,
-                sender=sender,
-                msg_type=msg_type,
-                policy=policy,
-                content=content,
-                reply=reply,
-                reason="manual_confirmation_denied",
-                sent=False,
-            )
-            return
+        if self._requires_manual_confirm(policy):
+            if self.config.approval_mode == "queue":
+                if self._queue_pending_reply(chat_name, sender, msg_type, policy, content, reply):
+                    append_history(history, role="assistant", sender="assistant", content=reply)
+                    self._mark_reply_emitted(chat_name, sent=False)
+                return
+            if not self._confirm_send(chat_name, reply):
+                self._log(f"Skipped sending reply to {chat_name}: manual confirmation was not granted.")
+                self._audit(
+                    "skip",
+                    chat_name=chat_name,
+                    sender=sender,
+                    msg_type=msg_type,
+                    policy=policy,
+                    content=content,
+                    reply=reply,
+                    reason="manual_confirmation_denied",
+                    sent=False,
+                )
+                return
 
         try:
             chat.SendMsg(reply)
@@ -506,6 +517,71 @@ class WeChatAutoReplyBot:
             self._log("Manual confirmation prompt is unavailable; refusing to send.")
             return False
         return answer == "YES"
+
+    def _queue_pending_reply(
+        self,
+        chat_name: str,
+        sender: str,
+        msg_type: str,
+        policy: str,
+        content: str,
+        reply: str,
+    ) -> bool:
+        if not self.config.pending_replies_file:
+            self._log("Pending reply queue is disabled because PENDING_REPLIES_FILE is empty.")
+            self._audit(
+                "skip",
+                chat_name=chat_name,
+                sender=sender,
+                msg_type=msg_type,
+                policy=policy,
+                content=content,
+                reply=reply,
+                reason="pending_replies_file_empty",
+                sent=False,
+            )
+            return False
+        event = {
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "action": "pending_approval",
+            "chat_name": chat_name,
+            "sender": sender,
+            "msg_type": msg_type,
+            "policy": policy,
+            "content_preview": self._preview(content),
+            "reply": redact_sensitive_text(reply),
+            "sent": False,
+        }
+        try:
+            append_rotating_line(
+                self.config.pending_replies_file,
+                json.dumps(event, ensure_ascii=False),
+                max_bytes=self.config.log_max_bytes,
+                backup_count=self.config.log_backup_count,
+            )
+        except OSError as exc:
+            self._record_error(
+                f"Failed to write pending reply queue {self.config.pending_replies_file}: {exc}",
+                chat_name=chat_name,
+                sender=sender,
+                msg_type=msg_type,
+                policy=policy,
+                content=content,
+                reply=reply,
+            )
+            return False
+        self._log(f"Queued pending reply to {chat_name}: {reply}")
+        self._audit(
+            "pending_approval",
+            chat_name=chat_name,
+            sender=sender,
+            msg_type=msg_type,
+            policy=policy,
+            content=content,
+            reply=reply,
+            sent=False,
+        )
+        return True
 
     def _mark_reply_emitted(self, chat_name: str, sent: bool) -> None:
         now = time.time()

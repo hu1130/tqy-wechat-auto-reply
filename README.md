@@ -101,6 +101,7 @@ powershell -ExecutionPolicy Bypass -File .\bootstrap_clean_windows.ps1
 - 生成安全默认 `.env`
 - 跑完整单元测试
 - 跑 `doctor --skip-llm`
+- 跑 `simulate --reply "ok, received" "hello"`，不登录微信也能验证回复链路
 
 默认安装目录：
 
@@ -128,6 +129,33 @@ cd "$env:USERPROFILE\Documents\tqy-wechat-auto-reply"
 ```
 
 ## 手动安装
+
+### 无微信/无 Ollama 的快速模拟测试
+
+如果新电脑还没有登录微信，或者大模型还没装好，可以先用固定回复跑完整安全链路：
+
+```powershell
+.\.venv\Scripts\python.exe main.py simulate --chat 文件传输助手 --reply "您好，已收到，我稍后确认。" "你好，在吗"
+```
+
+这个命令不会启动 wxauto，也不会真实发送微信消息。它会走同一套白名单、黑名单、敏感词、冷却时间、审计日志逻辑，适合先确认环境和配置是否正常。
+
+要测试“生成后进入人工确认队列”，运行：
+
+```powershell
+.\.venv\Scripts\python.exe main.py simulate --queue --chat 文件传输助手 --reply "您好，已收到，我稍后确认。" "你好，在吗"
+.\.venv\Scripts\python.exe main.py admin pending
+```
+
+如果复制中文示例时被终端编码影响，可以使用纯 ASCII 版本；它会自动读取 `.env` 中第一个 `WECHAT_LISTEN_CHATS`：
+
+```powershell
+.\.venv\Scripts\python.exe main.py simulate --reply "ok, received" "hello"
+.\.venv\Scripts\python.exe main.py simulate --queue --reply "ok, received" "hello"
+.\.venv\Scripts\python.exe main.py admin pending
+```
+
+`--queue` 只会写入 `logs/pending_replies.jsonl`，不会发送到真实微信。
 
 ```powershell
 py -3.11 -m venv .venv
@@ -202,6 +230,8 @@ DEFAULT_CHAT_POLICY=manual
 CHAT_POLICIES=
 REPLY_COOLDOWN_SECONDS=30
 REQUIRE_MANUAL_CONFIRM=1
+APPROVAL_MODE=console
+PENDING_REPLIES_FILE=logs/pending_replies.jsonl
 MAX_SENDS_PER_RUN=20
 MAX_SENDS_PER_CHAT=5
 MAX_SENDS_PER_DAY=100
@@ -227,6 +257,7 @@ STATE_DB_FILE=data/wechat-ai.sqlite3
 - `CHAT_POLICIES`：给单个聊天覆盖策略，格式如 `客户A=manual,测试群=dry_run,广告群=ignore`。
 - `REPLY_COOLDOWN_SECONDS`：同一个聊天两次回复之间的冷却时间，`0` 表示关闭。
 - `REQUIRE_MANUAL_CONFIRM=1`：真实发送前逐条要求在控制台输入 `YES`，建议上线初期保持开启。
+- `APPROVAL_MODE=queue`：真实发送前只写入待确认队列，配合 `python main.py admin pending` 查看，不会调用 `SendMsg`。
 - `MAX_SENDS_PER_RUN` / `MAX_SENDS_PER_CHAT`：限制单次运行和单个聊天的真实发送条数，`0` 表示不限制。
 - `MAX_SENDS_PER_DAY` / `MAX_SENDS_PER_CHAT_PER_DAY`：限制每天真实发送总量和单个聊天每天发送量，依赖 `STATE_DB_FILE`。
 - `MAX_ERRORS_BEFORE_PAUSE`：连续发生 LLM 或微信发送错误后自动暂停，`0` 表示不暂停。
@@ -303,6 +334,7 @@ python main.py run --live
 
 ```powershell
 python main.py admin status
+python main.py admin pending
 python main.py admin pause 客户A --reason handoff
 python main.py admin resume 客户A
 python main.py admin policy 客户A manual

@@ -22,6 +22,8 @@ class EnvTemplateTests(unittest.TestCase):
         self.assertIn("TEXT_MESSAGE_TYPES=text,friend", text)
         self.assertIn("DEFAULT_CHAT_POLICY=manual", text)
         self.assertIn("REQUIRE_MANUAL_CONFIRM=1", text)
+        self.assertIn("APPROVAL_MODE=console", text)
+        self.assertIn("PENDING_REPLIES_FILE=logs/pending_replies.jsonl", text)
         self.assertIn("MAX_SENDS_PER_RUN=20", text)
         self.assertIn("LOG_FILE=logs/wechat-ai.log", text)
         self.assertIn("AUDIT_LOG_FILE=logs/audit.jsonl", text)
@@ -145,6 +147,26 @@ class ConfigValidationTests(unittest.TestCase):
         )
 
         self.assertIn("CHAT_POLICIES contains invalid policies: unsafe.", validate_config(config))
+
+    def test_invalid_approval_mode_is_rejected(self) -> None:
+        config = AppConfig(
+            llm_provider="ollama",
+            llm_model="deepseek-r1:14b",
+            ollama_base_url="http://localhost:11434",
+            openai_base_url="https://api.openai.com/v1",
+            openai_api_key="",
+            request_timeout=120,
+            wechat_listen_chats=["chat"],
+            wechat_self_names=[],
+            max_context_messages=8,
+            dedup_window_seconds=60,
+            dry_run=True,
+            system_prompt="hello",
+            reply_allowed_chats=["chat"],
+            approval_mode="unsafe",
+        )
+
+        self.assertIn("APPROVAL_MODE should be either 'console' or 'queue'.", validate_config(config))
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("winget install --id $WingetId", text)
         self.assertIn("git clone --branch", text)
         self.assertIn("setup_test_environment.ps1", text)
+        self.assertIn("No-WeChat simulation command", text)
 
     def test_setup_script_creates_venv_and_runs_safety_checks(self) -> None:
         text = (ROOT / "setup_test_environment.ps1").read_text(encoding="utf-8")
@@ -25,6 +26,7 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("main.py init --yes", text)
         self.assertIn("unittest discover -s tests -v", text)
         self.assertIn("main.py doctor --skip-llm", text)
+        self.assertIn("main.py simulate --reply", text)
 
     def test_batch_wrapper_runs_setup_script(self) -> None:
         text = (ROOT / "test_environment.bat").read_text(encoding="utf-8")

@@ -138,6 +138,9 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Step "Done"
 Write-Host "Project path: $InstallDir"
+Write-Host "No-WeChat simulation command:"
+Write-Host "  cd `"$InstallDir`""
+Write-Host "  .\.venv\Scripts\python.exe main.py simulate --reply `"ok, received`" `"hello`""
 Write-Host "Next dry-run command:"
 Write-Host "  cd `"$InstallDir`""
 Write-Host "  .\.venv\Scripts\python.exe main.py run --dry-run --chat 文件传输助手"
