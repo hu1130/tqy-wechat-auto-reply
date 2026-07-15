@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import ctypes
 import importlib.util
 import json
 import platform
@@ -74,6 +75,34 @@ def check_wxauto() -> DoctorCheck:
     if importlib.util.find_spec("wxauto") is not None:
         return DoctorCheck("wxauto", "ok", "wxauto is installed.")
     return DoctorCheck("wxauto", "fail", "wxauto is not installed.", "Run `pip install -r requirements.txt`.")
+
+
+def _find_window_by_class(class_name: str) -> int:
+    if platform.system() != "Windows":
+        return 0
+    try:
+        return int(ctypes.windll.user32.FindWindowW(class_name, None))
+    except Exception:
+        return 0
+
+
+def check_wechat_window() -> DoctorCheck:
+    if platform.system() != "Windows":
+        return DoctorCheck(
+            "WeChat window",
+            "warn",
+            "Skipped because this is not Windows.",
+        )
+    hwnd = _find_window_by_class("WeChatMainWndForPC")
+    if hwnd:
+        return DoctorCheck("WeChat window", "ok", f"class=WeChatMainWndForPC hwnd={hwnd}")
+    return DoctorCheck(
+        "WeChat window",
+        "warn",
+        "Classic Windows WeChat main window was not found.",
+        "Open and log in to the classic Windows desktop WeChat 3.9.x main window. "
+        "wxauto does not attach to the new Weixin/WeChat 4.x window used by WeChatAppEx.",
+    )
 
 
 def check_llm(config: AppConfig) -> DoctorCheck:
@@ -205,6 +234,7 @@ def run_doctor(env_path: str | Path = ".env", check_llm_endpoint: bool = True) -
     checks.append(check_state_db(config))
     checks.append(check_knowledge_base(config))
     checks.append(check_wxauto())
+    checks.append(check_wechat_window())
     if check_llm_endpoint:
         checks.append(check_llm(config))
 

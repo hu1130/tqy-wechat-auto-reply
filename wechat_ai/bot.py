@@ -98,7 +98,16 @@ class WeChatAutoReplyBot:
             raise RuntimeError(
                 "wxauto is not installed. Run `pip install -r requirements.txt` on Windows."
             ) from exc
-        return WeChat()
+        try:
+            return WeChat()
+        except Exception as exc:
+            raise RuntimeError(
+                "Failed to attach to Windows desktop WeChat. "
+                "wxauto expects the classic Windows desktop WeChat 3.9.x main window "
+                "(window class WeChatMainWndForPC). Open and log in to WeChat, keep the main window visible, "
+                "avoid the new Weixin/WeChat 4.x window used by WeChatAppEx, and run this command with the "
+                f"same privilege level as WeChat. Original error: {exc}"
+            ) from exc
 
     def _on_message(self, msg: Any, chat: Any) -> None:
         if self.paused:

@@ -172,6 +172,14 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
+如果运行 `run --dry-run` 时出现 `SetWindowPos` / `无效的窗口句柄`，说明 `wxauto` 没找到经典 PC 微信主窗口。处理方式：
+
+- 关闭当前微信，打开并登录经典 Windows 桌面微信 3.9.x。
+- 不要使用新版 `Weixin` / WeChat 4.x 窗口；当前 wxauto 目标窗口类是 `WeChatMainWndForPC`。
+- 保持微信主窗口可见，不要只停留在托盘或后台。
+- PowerShell 和微信使用同一权限级别：都普通运行，或都管理员运行。
+- 再执行 `.\.venv\Scripts\python.exe main.py doctor --skip-llm`，确认 `WeChat window` 不再警告。
+
 如果你只想生成默认 `.env`，不走交互向导：
 
 ```powershell
