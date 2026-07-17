@@ -4,6 +4,11 @@ import argparse
 import json
 import sys
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from wechat_ai.admin import (
     pause_chat,
     render_pending_replies,
@@ -15,9 +20,11 @@ from wechat_ai.admin import (
 )
 from wechat_ai.bot import WeChatAutoReplyBot
 from wechat_ai.config import load_config
+from wechat_ai.connector_agent import connector_compatibility, connector_status, list_connectors, run_local_connector_agent
 from wechat_ai.doctor import run_doctor
 from wechat_ai.llm import LLMClient
 from wechat_ai.simulator import StaticReplyClient, simulate_message
+from wechat_ai.web_admin import run_dashboard_server
 from wechat_ai.wizard import init_env
 
 
@@ -44,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     simulate_parser = subparsers.add_parser("simulate", help="Run one fake WeChat message through the bot")
     simulate_parser.add_argument("--chat", help="Chat name to simulate, default: first WECHAT_LISTEN_CHATS item")
     simulate_parser.add_argument("--sender", default="simulated-user", help="Sender name to simulate")
-    simulate_parser.add_argument("--type", default="text", dest="msg_type", help="WeChat adapter message type to simulate")
+    simulate_parser.add_argument("--type", default="text", dest="msg_type", help="wxauto message type to simulate")
     simulate_parser.add_argument("--reply", help="Use this fixed reply instead of calling the LLM endpoint")
     simulate_parser.add_argument(
         "--live-path",
@@ -77,8 +84,15 @@ def build_parser() -> argparse.ArgumentParser:
     pause_parser.add_argument("chat", help="Chat name to pause")
     pause_parser.add_argument("--reason", default="manual", help="Pause reason")
 
+    handoff_parser = admin_subparsers.add_parser("handoff", help="Pause one chat for human handoff")
+    handoff_parser.add_argument("chat", help="Chat name to hand off to a human")
+    handoff_parser.add_argument("--reason", default="human_handoff", help="Handoff reason")
+
     resume_parser = admin_subparsers.add_parser("resume", help="Resume one chat")
     resume_parser.add_argument("chat", help="Chat name to resume")
+
+    takeback_parser = admin_subparsers.add_parser("takeback", help="Resume bot replies after human handoff")
+    takeback_parser.add_argument("chat", help="Chat name to resume")
 
     policy_parser = admin_subparsers.add_parser("policy", help="Set one chat policy")
     policy_parser.add_argument("chat", help="Chat name")
@@ -87,6 +101,25 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser = admin_subparsers.add_parser("report", help="Show daily audit report")
     report_parser.add_argument("--date", help="Date in YYYY-MM-DD format, default: today")
     report_parser.add_argument("--save", action="store_true", help="Save report to REPORTS_DIR")
+
+    dashboard_parser = subparsers.add_parser("dashboard", help="Run local web dashboard")
+    dashboard_parser.add_argument("--host", default="127.0.0.1", help="Dashboard host")
+    dashboard_parser.add_argument("--port", type=int, default=8787, help="Dashboard port")
+
+    connector_parser = subparsers.add_parser("connector", help="Run or inspect desktop connector agent")
+    connector_subparsers = connector_parser.add_subparsers(dest="connector_command")
+    connector_subparsers.add_parser("list", help="List supported connector channels")
+    connector_status_parser = connector_subparsers.add_parser("status", help="Show connector status")
+    connector_status_parser.add_argument("--id", default="local-wechat-desktop", help="Connector id")
+    connector_status_parser.add_argument("--channel", default="wechat_desktop", help="Connector channel")
+    connector_doctor_parser = connector_subparsers.add_parser("doctor", help="Show connector compatibility report")
+    connector_doctor_parser.add_argument("--id", default="local-wechat-desktop", help="Connector id")
+    connector_doctor_parser.add_argument("--channel", default="wechat_desktop", help="Connector channel")
+    connector_run_parser = connector_subparsers.add_parser("run-local", help="Run local connector agent and print events")
+    connector_run_parser.add_argument("--id", default="local-wechat-desktop", help="Connector id")
+    connector_run_parser.add_argument("--channel", default="wechat_desktop", help="Connector channel")
+    connector_run_parser.add_argument("--interval", type=float, default=1.0, help="Polling interval seconds")
+    connector_run_parser.add_argument("--echo", action="store_true", help="Echo inbound messages back through the connector")
     return parser
 
 
@@ -165,7 +198,13 @@ def run_admin_command(env_path: str, args: argparse.Namespace) -> int:
     if args.admin_command == "pause":
         print(pause_chat(config, chat_name=args.chat, reason=args.reason))
         return 0
+    if args.admin_command == "handoff":
+        print(pause_chat(config, chat_name=args.chat, reason=args.reason))
+        return 0
     if args.admin_command == "resume":
+        print(resume_chat(config, chat_name=args.chat))
+        return 0
+    if args.admin_command == "takeback":
         print(resume_chat(config, chat_name=args.chat))
         return 0
     if args.admin_command == "policy":
@@ -178,6 +217,35 @@ def run_admin_command(env_path: str, args: argparse.Namespace) -> int:
         print(render_report(config, report_date=args.date))
         return 0
     raise RuntimeError("Missing admin command. Use status, pending, pause, resume, policy, or report.")
+
+
+def run_dashboard_command(env_path: str, args: argparse.Namespace) -> int:
+    config = load_config(env_path)
+    run_dashboard_server(config, host=args.host, port=args.port)
+    return 0
+
+
+def run_connector_command(env_path: str, args: argparse.Namespace) -> int:
+    config = load_config(env_path)
+    if args.connector_command == "list":
+        print(json.dumps(list_connectors(), ensure_ascii=False, indent=2))
+        return 0
+    if args.connector_command == "status":
+        print(json.dumps(connector_status(config, connector_id=args.id, channel=args.channel), ensure_ascii=False, indent=2))
+        return 0
+    if args.connector_command == "doctor":
+        print(json.dumps(connector_compatibility(config, connector_id=args.id, channel=args.channel), ensure_ascii=False, indent=2))
+        return 0
+    if args.connector_command == "run-local":
+        run_local_connector_agent(
+            config,
+            connector_id=args.id,
+            channel=args.channel,
+            interval_seconds=args.interval,
+            echo=bool(args.echo),
+        )
+        return 0
+    raise RuntimeError("Missing connector command. Use list, status, doctor, or run-local.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -215,6 +283,12 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "admin":
             return run_admin_command(env_path=args.env, args=args)
+
+        if args.command == "dashboard":
+            return run_dashboard_command(env_path=args.env, args=args)
+
+        if args.command == "connector":
+            return run_connector_command(env_path=args.env, args=args)
 
         return run_wechat_bot(
             env_path=args.env,

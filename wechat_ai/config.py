@@ -22,6 +22,7 @@ DEFAULT_ENV_VALUES = {
     "WECHAT_LISTEN_CHATS": "文件传输助手",
     "WECHAT_SELF_NAMES": "",
     "MAX_CONTEXT_MESSAGES": "8",
+    "MESSAGE_BUFFER_SECONDS": "3",
     "DEDUP_WINDOW_SECONDS": "60",
     "DRY_RUN": "1",
     "REPLY_ALLOWED_CHATS": "文件传输助手",
@@ -29,6 +30,13 @@ DEFAULT_ENV_VALUES = {
     "REPLY_ALLOWED_SENDERS": "",
     "REPLY_BLOCKED_SENDERS": "",
     "TEXT_MESSAGE_TYPES": "text,friend",
+    "VOICE_TO_TEXT_ENABLED": "1",
+    "VOICE_TO_TEXT_TIMEOUT_SECONDS": "2",
+    "GROUP_CHATS_ENABLED": "0",
+    "GROUP_CHAT_PATTERNS": "\u7fa4\u804a,\u5fae\u4fe1\u7fa4,\u5de5\u4f5c\u7fa4",
+    "DASHBOARD_USERS": "admin:admin123:admin",
+    "WELCOME_MESSAGE_ENABLED": "1",
+    "WELCOME_MESSAGE": "\u60a8\u597d\uff0c\u6211\u662f\u6df1\u5ea6\u89c9\u9192\u7684\u53ee\u5f53\uff0c\u4e3b\u8981\u5e2e\u60a8\u4e86\u89e3\u6211\u4eec\u7684AI\u5ba2\u670d\u3001\u4f01\u4e1a\u667a\u80fd\u4f53\u548c\u76f8\u5173\u843d\u5730\u65b9\u6848\u3002\u60a8\u53ef\u4ee5\u76f4\u63a5\u544a\u8bc9\u6211\u60f3\u89e3\u51b3\u7684\u95ee\u9898\uff0c\u6211\u4f1a\u5148\u5e2e\u60a8\u6574\u7406\u65b9\u5411\uff0c\u5fc5\u8981\u65f6\u518d\u8f6c\u4eba\u5de5\u540c\u4e8b\u8ddf\u8fdb\u3002",
     "SENSITIVE_KEYWORDS": "转账,付款,收款,验证码,密码,银行卡,身份证,合同,报价,价格,地址,电话,手机号,隐私,发票,退款,投诉",
     "MAX_REPLY_CHARS": "120",
     "BLOCKED_REPLY_PATTERNS": "我是AI,作为AI,我不能,无法提供,验证码,密码,银行卡,身份证,转账",
@@ -126,6 +134,7 @@ def env_template(values: dict[str, str] | None = None) -> str:
             f"WECHAT_LISTEN_CHATS={merged['WECHAT_LISTEN_CHATS']}",
             f"WECHAT_SELF_NAMES={merged['WECHAT_SELF_NAMES']}",
             f"MAX_CONTEXT_MESSAGES={merged['MAX_CONTEXT_MESSAGES']}",
+            f"MESSAGE_BUFFER_SECONDS={merged['MESSAGE_BUFFER_SECONDS']}",
             f"DEDUP_WINDOW_SECONDS={merged['DEDUP_WINDOW_SECONDS']}",
             f"DRY_RUN={merged['DRY_RUN']}",
             "",
@@ -135,6 +144,13 @@ def env_template(values: dict[str, str] | None = None) -> str:
             f"REPLY_ALLOWED_SENDERS={merged['REPLY_ALLOWED_SENDERS']}",
             f"REPLY_BLOCKED_SENDERS={merged['REPLY_BLOCKED_SENDERS']}",
             f"TEXT_MESSAGE_TYPES={merged['TEXT_MESSAGE_TYPES']}",
+            f"VOICE_TO_TEXT_ENABLED={merged['VOICE_TO_TEXT_ENABLED']}",
+            f"VOICE_TO_TEXT_TIMEOUT_SECONDS={merged['VOICE_TO_TEXT_TIMEOUT_SECONDS']}",
+            f"GROUP_CHATS_ENABLED={merged['GROUP_CHATS_ENABLED']}",
+            f"GROUP_CHAT_PATTERNS={merged['GROUP_CHAT_PATTERNS']}",
+            f"DASHBOARD_USERS={merged['DASHBOARD_USERS']}",
+            f"WELCOME_MESSAGE_ENABLED={merged['WELCOME_MESSAGE_ENABLED']}",
+            f"WELCOME_MESSAGE={merged['WELCOME_MESSAGE']}",
             f"SENSITIVE_KEYWORDS={merged['SENSITIVE_KEYWORDS']}",
             f"MAX_REPLY_CHARS={merged['MAX_REPLY_CHARS']}",
             f"BLOCKED_REPLY_PATTERNS={merged['BLOCKED_REPLY_PATTERNS']}",
@@ -191,6 +207,7 @@ class AppConfig:
     wechat_listen_chats: list[str]
     wechat_self_names: list[str]
     max_context_messages: int
+    message_buffer_seconds: int
     dedup_window_seconds: int
     dry_run: bool
     system_prompt: str
@@ -199,6 +216,13 @@ class AppConfig:
     reply_allowed_senders: list[str] = field(default_factory=list)
     reply_blocked_senders: list[str] = field(default_factory=list)
     text_message_types: list[str] = field(default_factory=lambda: ["text", "friend"])
+    voice_to_text_enabled: bool = True
+    voice_to_text_timeout_seconds: int = 2
+    group_chats_enabled: bool = False
+    group_chat_patterns: list[str] = field(default_factory=list)
+    dashboard_users: str = "admin:admin123:admin"
+    welcome_message_enabled: bool = True
+    welcome_message: str = ""
     sensitive_keywords: list[str] = field(default_factory=list)
     max_reply_chars: int = 120
     blocked_reply_patterns: list[str] = field(default_factory=list)
@@ -240,6 +264,7 @@ class AppConfig:
             "wechat_listen_chats": self.wechat_listen_chats,
             "wechat_self_names": self.wechat_self_names,
             "max_context_messages": self.max_context_messages,
+            "message_buffer_seconds": self.message_buffer_seconds,
             "dedup_window_seconds": self.dedup_window_seconds,
             "dry_run": self.dry_run,
             "reply_allowed_chats": self.reply_allowed_chats,
@@ -247,6 +272,13 @@ class AppConfig:
             "reply_allowed_senders": self.reply_allowed_senders,
             "reply_blocked_senders": self.reply_blocked_senders,
             "text_message_types": self.text_message_types,
+            "voice_to_text_enabled": self.voice_to_text_enabled,
+            "voice_to_text_timeout_seconds": self.voice_to_text_timeout_seconds,
+            "group_chats_enabled": self.group_chats_enabled,
+            "group_chat_patterns": self.group_chat_patterns,
+            "dashboard_users_set": bool(self.dashboard_users),
+            "welcome_message_enabled": self.welcome_message_enabled,
+            "welcome_message_set": bool(self.welcome_message),
             "sensitive_keywords": self.sensitive_keywords,
             "max_reply_chars": self.max_reply_chars,
             "blocked_reply_patterns": self.blocked_reply_patterns,
@@ -289,8 +321,12 @@ def validate_config(config: AppConfig) -> list[str]:
         warnings.append("REPLY_ALLOWED_CHATS is required. Start with a small whitelist such as 文件传输助手.")
     if config.max_context_messages <= 0:
         warnings.append("MAX_CONTEXT_MESSAGES should be greater than 0.")
+    if config.message_buffer_seconds < 0:
+        warnings.append("MESSAGE_BUFFER_SECONDS should not be negative.")
     if config.dedup_window_seconds < 0:
         warnings.append("DEDUP_WINDOW_SECONDS should not be negative.")
+    if config.voice_to_text_timeout_seconds < 0:
+        warnings.append("VOICE_TO_TEXT_TIMEOUT_SECONDS should not be negative.")
     if config.request_timeout <= 0:
         warnings.append("REQUEST_TIMEOUT should be greater than 0.")
     if config.max_reply_chars < 0:
@@ -338,6 +374,10 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         wechat_listen_chats=_split_csv(os.getenv("WECHAT_LISTEN_CHATS", DEFAULT_ENV_VALUES["WECHAT_LISTEN_CHATS"])),
         wechat_self_names=_split_csv(os.getenv("WECHAT_SELF_NAMES", DEFAULT_ENV_VALUES["WECHAT_SELF_NAMES"])),
         max_context_messages=_get_int("MAX_CONTEXT_MESSAGES", int(DEFAULT_ENV_VALUES["MAX_CONTEXT_MESSAGES"])),
+        message_buffer_seconds=_get_int(
+            "MESSAGE_BUFFER_SECONDS",
+            int(DEFAULT_ENV_VALUES["MESSAGE_BUFFER_SECONDS"]),
+        ),
         dedup_window_seconds=_get_int("DEDUP_WINDOW_SECONDS", int(DEFAULT_ENV_VALUES["DEDUP_WINDOW_SECONDS"])),
         dry_run=_get_bool("DRY_RUN", True),
         system_prompt=os.getenv(
@@ -360,6 +400,16 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
             item.lower()
             for item in _split_csv(os.getenv("TEXT_MESSAGE_TYPES", DEFAULT_ENV_VALUES["TEXT_MESSAGE_TYPES"]))
         ],
+        voice_to_text_enabled=_get_bool("VOICE_TO_TEXT_ENABLED", True),
+        voice_to_text_timeout_seconds=_get_int(
+            "VOICE_TO_TEXT_TIMEOUT_SECONDS",
+            int(DEFAULT_ENV_VALUES["VOICE_TO_TEXT_TIMEOUT_SECONDS"]),
+        ),
+        group_chats_enabled=_get_bool("GROUP_CHATS_ENABLED", False),
+        group_chat_patterns=_split_csv(os.getenv("GROUP_CHAT_PATTERNS", DEFAULT_ENV_VALUES["GROUP_CHAT_PATTERNS"])),
+        dashboard_users=os.getenv("DASHBOARD_USERS", DEFAULT_ENV_VALUES["DASHBOARD_USERS"]).strip(),
+        welcome_message_enabled=_get_bool("WELCOME_MESSAGE_ENABLED", True),
+        welcome_message=os.getenv("WELCOME_MESSAGE", DEFAULT_ENV_VALUES["WELCOME_MESSAGE"]).strip(),
         sensitive_keywords=_split_csv(
             os.getenv("SENSITIVE_KEYWORDS", DEFAULT_ENV_VALUES["SENSITIVE_KEYWORDS"])
         ),

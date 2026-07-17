@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import ModuleType
 from unittest.mock import patch
 
 from wechat_ai.bot import WeChatAutoReplyBot
@@ -18,6 +16,7 @@ class FakeLLM:
         self.error = error
         self.calls = 0
         self.knowledge_contexts: list[str] = []
+        self.histories: list[list[dict[str, str]]] = []
 
     def generate_reply(
         self,
@@ -27,6 +26,7 @@ class FakeLLM:
     ) -> str:
         self.calls += 1
         self.knowledge_contexts.append(knowledge_context)
+        self.histories.append(history)
         if self.error:
             raise self.error
         return self.reply
@@ -39,6 +39,31 @@ class FakeMessage:
         self.type = msg_type
 
 
+class FakeVoiceMessage(FakeMessage):
+    def __init__(self, text: str = "voice text", sender: str = "alice", content: str = "", msg_type: str = "voice") -> None:
+        super().__init__(content=content, sender=sender, msg_type=msg_type)
+        self.text = text
+        self.to_text_calls = 0
+
+    def to_text(self) -> str:
+        self.to_text_calls += 1
+        return self.text
+
+
+class FakeBrokenVoiceMessage(FakeVoiceMessage):
+    def to_text(self) -> str:
+        self.to_text_calls += 1
+        raise RuntimeError("voice engine unavailable")
+
+
+class FakeFlakyVoiceMessage(FakeVoiceMessage):
+    def to_text(self) -> str:
+        self.to_text_calls += 1
+        if self.to_text_calls <= 2:
+            return ""
+        return self.text
+
+
 class FakeChat:
     who = "chat"
 
@@ -49,12 +74,54 @@ class FakeChat:
         self.sent.append(message)
 
 
-class FakeWeChatClient:
-    def AddListenChat(self, chat_name: str, callback: object) -> None:
-        pass
+class FakeWx:
+    def __init__(self, messages: list[FakeMessage] | None = None) -> None:
+        self.current_chat = ""
+        self.sent: list[tuple[str, str]] = []
+        self.messages = messages or []
 
-    def KeepRunning(self) -> None:
-        pass
+    def ChatWith(self, chat_name: str) -> None:
+        self.current_chat = chat_name
+
+    def GetAllMessage(self) -> list[FakeMessage]:
+        return self.messages
+
+    def SendMsg(self, message: str) -> None:
+        self.sent.append((self.current_chat, message))
+
+
+class FakeWxSequence(FakeWx):
+    def __init__(self, message_batches: list[list[FakeMessage]]) -> None:
+        super().__init__(messages=[])
+        self.message_batches = message_batches
+        self.get_calls = 0
+
+    def GetAllMessage(self) -> list[FakeMessage]:
+        index = min(self.get_calls, len(self.message_batches) - 1)
+        self.get_calls += 1
+        return self.message_batches[index]
+
+
+class FakeSession:
+    def __init__(
+        self,
+        name: str = "chat",
+        content: str = "hello",
+        isnew: bool = False,
+        new_count: int = 0,
+    ) -> None:
+        self.name = name
+        self.content = content
+        self.time = "2026-07-16 12:00:00"
+        self.isnew = isnew
+        self.new_count = new_count
+        self.info = {
+            "name": name,
+            "time": self.time,
+            "content": content,
+            "isnew": isnew,
+            "new_count": new_count,
+        }
 
 
 def make_config(**overrides: object) -> AppConfig:
@@ -68,6 +135,7 @@ def make_config(**overrides: object) -> AppConfig:
         wechat_listen_chats=["chat"],
         wechat_self_names=[],
         max_context_messages=8,
+        message_buffer_seconds=3,
         dedup_window_seconds=60,
         dry_run=True,
         system_prompt="system",
@@ -83,44 +151,6 @@ def make_config(**overrides: object) -> AppConfig:
 
 
 class BotSafetyTests(unittest.TestCase):
-    def test_create_wechat_client_uses_wxauto4_listener_api(self) -> None:
-        module = ModuleType("wxauto4")
-        module.WeChat = FakeWeChatClient
-        bot = WeChatAutoReplyBot(config=make_config(), llm_client=FakeLLM())
-
-        with patch("wechat_ai.bot.platform.system", return_value="Windows"):
-            with patch.dict(sys.modules, {"wxauto4": module}):
-                client = bot._create_wechat_client()
-
-        self.assertIsInstance(client, FakeWeChatClient)
-
-    def test_create_wechat_client_rejects_package_without_listener_api(self) -> None:
-        class IncompleteWeChatClient:
-            pass
-
-        module = ModuleType("wxauto4")
-        module.WeChat = IncompleteWeChatClient
-        bot = WeChatAutoReplyBot(config=make_config(), llm_client=FakeLLM())
-
-        with patch("wechat_ai.bot.platform.system", return_value="Windows"):
-            with patch.dict(sys.modules, {"wxauto4": module}):
-                with self.assertRaisesRegex(RuntimeError, "required listener methods"):
-                    bot._create_wechat_client()
-
-    def test_create_wechat_client_reports_blocked_native_import(self) -> None:
-        bot = WeChatAutoReplyBot(config=make_config(), llm_client=FakeLLM())
-        original_import = __import__
-
-        def import_with_blocked_wxauto4(name: str, *args: object, **kwargs: object) -> object:
-            if name == "wxauto4":
-                raise ImportError("DLL blocked")
-            return original_import(name, *args, **kwargs)
-
-        with patch("wechat_ai.bot.platform.system", return_value="Windows"):
-            with patch("builtins.__import__", side_effect=import_with_blocked_wxauto4):
-                with self.assertRaisesRegex(RuntimeError, "could not load its native Windows components"):
-                    bot._create_wechat_client()
-
     def test_dry_run_generates_without_sending(self) -> None:
         chat = FakeChat()
         llm = FakeLLM()
@@ -130,6 +160,133 @@ class BotSafetyTests(unittest.TestCase):
 
         self.assertEqual(llm.calls, 1)
         self.assertEqual(chat.sent, [])
+
+    def test_first_customer_message_sends_welcome_once_before_ai_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            chat = FakeChat()
+            llm = FakeLLM(reply="ai reply")
+            welcome = "welcome text"
+            bot = WeChatAutoReplyBot(
+                config=make_config(
+                    dry_run=False,
+                    require_manual_confirm=False,
+                    state_db_file=str(Path(temp_dir) / "state.sqlite3"),
+                    welcome_message_enabled=True,
+                    welcome_message=welcome,
+                ),
+                llm_client=llm,
+            )
+
+            bot._on_message(FakeMessage("hello"), chat)
+            bot._on_message(FakeMessage("second"), chat)
+
+        self.assertEqual(chat.sent, [welcome, "ai reply"])
+        self.assertEqual(llm.calls, 1)
+
+    def test_visible_customer_message_sends_welcome_before_startup_seed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wx = FakeWx(messages=[FakeMessage(content="hello", sender="new customer")])
+            welcome = "welcome text"
+            bot = WeChatAutoReplyBot(
+                config=make_config(
+                    dry_run=False,
+                    require_manual_confirm=False,
+                    reply_allowed_chats=["*"],
+                    state_db_file=str(Path(temp_dir) / "state.sqlite3"),
+                    welcome_message_enabled=True,
+                    welcome_message=welcome,
+                ),
+                llm_client=FakeLLM(),
+            )
+            seen: dict[str, set[str]] = {}
+
+            bot._seed_polling_chat(wx, "new customer", seen)
+            bot._seed_polling_chat(wx, "new customer", seen)
+
+        self.assertEqual(wx.sent, [("new customer", welcome)])
+
+    def test_startup_seed_does_not_welcome_when_latest_visible_message_is_self(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wx = FakeWx(
+                messages=[
+                    FakeMessage(content="hello", sender="new customer"),
+                    FakeMessage(content="already replied", sender="self"),
+                ]
+            )
+            bot = WeChatAutoReplyBot(
+                config=make_config(
+                    dry_run=False,
+                    require_manual_confirm=False,
+                    reply_allowed_chats=["*"],
+                    state_db_file=str(Path(temp_dir) / "state.sqlite3"),
+                    welcome_message_enabled=True,
+                    welcome_message="welcome text",
+                ),
+                llm_client=FakeLLM(),
+            )
+            seen: dict[str, set[str]] = {}
+
+            bot._seed_polling_chat(wx, "old customer", seen)
+
+        self.assertEqual(wx.sent, [])
+
+    def test_wildcard_allowed_chats_allows_any_chat(self) -> None:
+        chat = FakeChat()
+        llm = FakeLLM()
+        bot = WeChatAutoReplyBot(
+            config=make_config(reply_allowed_chats=["*"], dry_run=True),
+            llm_client=llm,
+        )
+
+        bot._on_message(FakeMessage(), chat)
+
+        self.assertEqual(llm.calls, 1)
+        self.assertEqual(chat.sent, [])
+
+    def test_star_chat_enables_session_scan_mode(self) -> None:
+        self.assertTrue(WeChatAutoReplyBot._is_session_scan_mode(["*"]))
+        self.assertFalse(WeChatAutoReplyBot._is_session_scan_mode(["KiraAI"]))
+
+    def test_group_like_chat_is_skipped_unless_explicitly_allowed(self) -> None:
+        group_name = "\u6df1\u5ea6\u89c9\u9192\u5de5\u4f5c\u7fa4"
+        bot = WeChatAutoReplyBot(
+            config=make_config(
+                reply_allowed_chats=["*"],
+                group_chats_enabled=False,
+                group_chat_patterns=["\u5de5\u4f5c\u7fa4"],
+            ),
+            llm_client=FakeLLM(),
+        )
+        explicit_bot = WeChatAutoReplyBot(
+            config=make_config(
+                reply_allowed_chats=[group_name],
+                group_chats_enabled=False,
+                group_chat_patterns=["\u5de5\u4f5c\u7fa4"],
+            ),
+            llm_client=FakeLLM(),
+        )
+
+        self.assertTrue(bot._should_skip_group_chat(group_name))
+        self.assertFalse(explicit_bot._should_skip_group_chat(group_name))
+
+    def test_club_named_contact_is_not_treated_as_group_by_default(self) -> None:
+        bot = WeChatAutoReplyBot(
+            config=make_config(
+                reply_allowed_chats=["*"],
+                group_chats_enabled=False,
+                group_chat_patterns=["\u7fa4\u804a", "\u5fae\u4fe1\u7fa4", "\u5de5\u4f5c\u7fa4"],
+            ),
+            llm_client=FakeLLM(),
+        )
+
+        self.assertFalse(bot._should_skip_group_chat("\u963f\u7389\u4e09\u53cb\u8d22\u5bcc\u4ff1\u4e50\u90e8"))
+
+    def test_session_helpers_read_visible_chat_info(self) -> None:
+        session = FakeSession(name="KiraAI", content="latest", isnew=True, new_count=2)
+
+        self.assertEqual(WeChatAutoReplyBot._session_name(session), "KiraAI")
+        self.assertIn("latest", WeChatAutoReplyBot._session_signature(session))
+        self.assertTrue(WeChatAutoReplyBot._session_has_unread(session))
 
     def test_blocked_chat_skips_llm_and_send(self) -> None:
         chat = FakeChat()
@@ -153,6 +310,96 @@ class BotSafetyTests(unittest.TestCase):
 
         self.assertEqual(llm.calls, 0)
         self.assertEqual(chat.sent, [])
+
+    def test_voice_message_is_transcribed_before_reply(self) -> None:
+        chat = FakeChat()
+        llm = FakeLLM(reply="voice reply")
+        voice = FakeVoiceMessage("what is the price")
+        bot = WeChatAutoReplyBot(
+            config=make_config(dry_run=False, require_manual_confirm=False),
+            llm_client=llm,
+        )
+
+        bot._on_message(voice, chat)
+
+        self.assertEqual(llm.calls, 1)
+        self.assertEqual(chat.sent, ["voice reply"])
+        self.assertEqual(llm.histories[-1][-1]["content"], "what is the price")
+        self.assertEqual(voice.to_text_calls, 1)
+
+    def test_unplayed_voice_placeholder_is_transcribed_before_reply(self) -> None:
+        chat = FakeChat()
+        llm = FakeLLM(reply="voice reply")
+        voice = FakeVoiceMessage(
+            "what is the price",
+            content='语音5"秒未播放',
+            msg_type="text",
+        )
+        bot = WeChatAutoReplyBot(
+            config=make_config(dry_run=False, require_manual_confirm=False),
+            llm_client=llm,
+        )
+
+        bot._on_message(voice, chat)
+
+        self.assertEqual(llm.calls, 1)
+        self.assertEqual(chat.sent, ["voice reply"])
+        self.assertEqual(llm.histories[-1][-1]["content"], "what is the price")
+        self.assertEqual(voice.to_text_calls, 1)
+
+    def test_real_chinese_voice_placeholder_is_transcribed_before_reply(self) -> None:
+        chat = FakeChat()
+        llm = FakeLLM(reply="voice reply")
+        voice = FakeVoiceMessage(
+            "what is the price",
+            content='\u8bed\u97f35"\u79d2\u672a\u64ad\u653e',
+            msg_type="text",
+        )
+        bot = WeChatAutoReplyBot(
+            config=make_config(dry_run=False, require_manual_confirm=False),
+            llm_client=llm,
+        )
+
+        bot._on_message(voice, chat)
+
+        self.assertEqual(llm.calls, 1)
+        self.assertEqual(chat.sent, ["voice reply"])
+        self.assertEqual(llm.histories[-1][-1]["content"], "what is the price")
+        self.assertEqual(voice.to_text_calls, 1)
+
+    def test_voice_message_is_skipped_when_transcription_is_disabled(self) -> None:
+        chat = FakeChat()
+        llm = FakeLLM(reply="voice reply")
+        voice = FakeVoiceMessage("what is the price")
+        bot = WeChatAutoReplyBot(
+            config=make_config(
+                dry_run=False,
+                require_manual_confirm=False,
+                voice_to_text_enabled=False,
+            ),
+            llm_client=llm,
+        )
+
+        bot._on_message(voice, chat)
+
+        self.assertEqual(llm.calls, 0)
+        self.assertEqual(chat.sent, [])
+        self.assertEqual(voice.to_text_calls, 0)
+
+    def test_voice_message_is_skipped_when_transcription_fails(self) -> None:
+        chat = FakeChat()
+        llm = FakeLLM(reply="voice reply")
+        voice = FakeBrokenVoiceMessage("what is the price")
+        bot = WeChatAutoReplyBot(
+            config=make_config(dry_run=False, require_manual_confirm=False),
+            llm_client=llm,
+        )
+
+        bot._on_message(voice, chat)
+
+        self.assertEqual(llm.calls, 0)
+        self.assertEqual(chat.sent, [])
+        self.assertEqual(voice.to_text_calls, 1)
 
     def test_sensitive_input_skips_llm_and_send(self) -> None:
         chat = FakeChat()
@@ -213,6 +460,231 @@ class BotSafetyTests(unittest.TestCase):
 
         self.assertEqual(chat.sent, ["approved"])
         self.assertEqual(bot.sent_count, 1)
+
+    def test_live_send_splits_multiline_reply_with_delay(self) -> None:
+        chat = FakeChat()
+        llm = FakeLLM(reply="first\nsecond\n\nthird")
+        bot = WeChatAutoReplyBot(
+            config=make_config(dry_run=False, require_manual_confirm=False),
+            llm_client=llm,
+        )
+
+        with patch("wechat_ai.bot.time.sleep") as sleep:
+            bot._on_message(FakeMessage(), chat)
+
+        self.assertEqual(chat.sent, ["first", "second", "third"])
+        self.assertEqual(sleep.call_count, 2)
+        sleep.assert_called_with(2.5)
+        self.assertEqual(bot.sent_count, 1)
+
+    def test_live_send_splits_long_sentence_reply_with_delay(self) -> None:
+        chat = FakeChat()
+        llm = FakeLLM(
+            reply=(
+                "我们主要做两个方向：一个是AI智能前台和客服平台，帮企业自动接待访客、回答常见问题；"
+                "另一个是AI虚拟试穿，用户上传照片就能试婚纱或服装。"
+                "你具体关心哪个场景？我可以让对应的同事详细介绍。"
+            )
+        )
+        bot = WeChatAutoReplyBot(
+            config=make_config(dry_run=False, require_manual_confirm=False),
+            llm_client=llm,
+        )
+
+        with patch("wechat_ai.bot.time.sleep") as sleep:
+            bot._on_message(FakeMessage(), chat)
+
+        self.assertGreater(len(chat.sent), 1)
+        self.assertEqual("".join(chat.sent), llm.reply)
+        self.assertEqual(sleep.call_count, len(chat.sent) - 1)
+
+    def test_split_reply_merges_tiny_tail(self) -> None:
+        llm = FakeLLM()
+        bot = WeChatAutoReplyBot(
+            config=make_config(max_reply_chars=120),
+            llm_client=llm,
+        )
+
+        parts = bot._split_reply_parts(
+            "这套系统可以帮企业自动接待客户、回答常见问题、收集线索，并且把关键需求同步给销售同事。"
+            "如果你们现在咨询量比较大，它还能把客户按意向分类，方便后续跟进。"
+            "要不要我先按你的行业给你举个例子？"
+        )
+
+        self.assertGreater(len(parts), 1)
+        self.assertGreaterEqual(len(parts[-1]), 12)
+
+    def test_message_buffer_waits_then_combines_customer_messages(self) -> None:
+        chat = FakeChat()
+        llm = FakeLLM(reply="combined")
+        bot = WeChatAutoReplyBot(
+            config=make_config(dry_run=False, require_manual_confirm=False, message_buffer_seconds=3),
+            llm_client=llm,
+        )
+        pending: dict[str, dict[str, object]] = {}
+
+        with patch("wechat_ai.bot.time.time", side_effect=[100.0, 101.0, 103.9, 104.1, 104.1, 104.1]):
+            bot._queue_buffered_message(pending, "chat", chat, FakeMessage("第一句"))
+            bot._queue_buffered_message(pending, "chat", chat, FakeMessage("第二句"))
+            bot._flush_due_message_buffers(pending)
+            self.assertEqual(llm.calls, 0)
+            bot._flush_due_message_buffers(pending)
+
+        self.assertEqual(llm.calls, 1)
+        self.assertEqual(chat.sent, ["combined"])
+        self.assertEqual(llm.histories[-1][-1]["content"], "第一句\n第二句")
+
+    def test_message_buffer_combines_voice_and_text(self) -> None:
+        chat = FakeChat()
+        llm = FakeLLM(reply="combined")
+        voice = FakeVoiceMessage("voice part")
+        bot = WeChatAutoReplyBot(
+            config=make_config(dry_run=False, require_manual_confirm=False, message_buffer_seconds=3),
+            llm_client=llm,
+        )
+        pending: dict[str, dict[str, object]] = {}
+
+        with patch("wechat_ai.bot.time.time", side_effect=[100.0, 101.0, 104.1, 104.1, 104.1]):
+            bot._queue_buffered_message(pending, "chat", chat, voice)
+            bot._queue_buffered_message(pending, "chat", chat, FakeMessage("text part"))
+            bot._flush_due_message_buffers(pending)
+
+        self.assertEqual(llm.calls, 1)
+        self.assertEqual(chat.sent, ["combined"])
+        self.assertEqual(llm.histories[-1][-1]["content"], "voice part\ntext part")
+        self.assertEqual(voice.to_text_calls, 1)
+
+    def test_message_buffer_flushes_one_chat_per_tick(self) -> None:
+        chat_a = FakeChat()
+        chat_b = FakeChat()
+        chat_b.who = "chat-b"
+        llm = FakeLLM(reply="reply")
+        bot = WeChatAutoReplyBot(
+            config=make_config(
+                reply_allowed_chats=["*"],
+                dry_run=False,
+                require_manual_confirm=False,
+                message_buffer_seconds=3,
+            ),
+            llm_client=llm,
+        )
+        pending: dict[str, dict[str, object]] = {}
+
+        with patch("wechat_ai.bot.time.time", side_effect=[100.0, 100.0, 104.0, 104.0, 104.0]):
+            bot._queue_buffered_message(pending, "chat", chat_a, FakeMessage("one"))
+            bot._queue_buffered_message(pending, "chat-b", chat_b, FakeMessage("two"))
+            bot._flush_due_message_buffers(pending)
+
+        self.assertEqual(llm.calls, 1)
+        self.assertEqual(chat_a.sent, ["reply"])
+        self.assertEqual(chat_b.sent, [])
+        self.assertIn("chat-b", pending)
+
+    def test_poll_chat_rechecks_after_handling_interleaved_message(self) -> None:
+        wx = FakeWxSequence(
+            [
+                [FakeMessage("old", sender="alice")],
+                [
+                    FakeMessage("old", sender="alice"),
+                    FakeMessage("new while sending", sender="alice"),
+                ],
+            ]
+        )
+        llm = FakeLLM(reply="reply")
+        bot = WeChatAutoReplyBot(
+            config=make_config(
+                dry_run=False,
+                require_manual_confirm=False,
+                message_buffer_seconds=3,
+            ),
+            llm_client=llm,
+        )
+        seen: dict[str, set[str]] = {}
+        pending: dict[str, dict[str, object]] = {}
+
+        bot._poll_chat_once(wx, "chat", seen, pending)
+
+        self.assertEqual(llm.calls, 0)
+        self.assertEqual(wx.get_calls, 2)
+        self.assertIn("chat", pending)
+        messages = pending["chat"]["messages"]
+        self.assertEqual([msg.content for msg in messages], ["old", "new while sending"])
+
+    def test_message_buffer_retries_voice_transcription_before_reply(self) -> None:
+        chat = FakeChat()
+        llm = FakeLLM(reply="combined")
+        voice = FakeFlakyVoiceMessage("voice part")
+        bot = WeChatAutoReplyBot(
+            config=make_config(dry_run=False, require_manual_confirm=False, message_buffer_seconds=3),
+            llm_client=llm,
+        )
+        pending: dict[str, dict[str, object]] = {}
+
+        bot._queue_buffered_message(pending, "chat", chat, voice)
+        bot._flush_message_buffer(pending, "chat")
+
+        self.assertIn("chat", pending)
+        self.assertEqual(llm.calls, 0)
+        self.assertEqual(chat.sent, [])
+
+        bot._flush_message_buffer(pending, "chat")
+
+        self.assertNotIn("chat", pending)
+        self.assertEqual(llm.calls, 1)
+        self.assertEqual(chat.sent, ["combined"])
+        self.assertEqual(llm.histories[-1][-1]["content"], "voice part")
+        self.assertEqual(voice.to_text_calls, 3)
+
+    def test_message_buffer_delays_during_cooldown_without_dropping_message(self) -> None:
+        chat = FakeChat()
+        llm = FakeLLM(reply="after cooldown")
+        bot = WeChatAutoReplyBot(
+            config=make_config(
+                dry_run=False,
+                require_manual_confirm=False,
+                message_buffer_seconds=3,
+                reply_cooldown_seconds=3,
+            ),
+            llm_client=llm,
+        )
+        pending: dict[str, dict[str, object]] = {}
+
+        with patch("wechat_ai.bot.time.time", return_value=100.0):
+            bot.last_reply_at["chat"] = 98.0
+            bot._queue_buffered_message(pending, "chat", chat, FakeMessage("question"))
+            bot._flush_message_buffer(pending, "chat")
+
+        self.assertIn("chat", pending)
+        self.assertEqual(llm.calls, 0)
+        self.assertEqual(chat.sent, [])
+
+        with patch("wechat_ai.bot.time.time", return_value=105.0):
+            bot._flush_message_buffer(pending, "chat")
+
+        self.assertNotIn("chat", pending)
+        self.assertEqual(llm.calls, 1)
+        self.assertEqual(chat.sent, ["after cooldown"])
+
+    def test_seed_history_from_visible_messages(self) -> None:
+        llm = FakeLLM()
+        bot = WeChatAutoReplyBot(config=make_config(), llm_client=llm)
+
+        bot._seed_history_from_messages(
+            "chat",
+            [
+                FakeMessage("09:00", sender="", msg_type="time"),
+                FakeMessage("你们公司是干什么的", sender="alice"),
+                FakeMessage("我们做AI客服。", sender="self"),
+            ],
+        )
+
+        self.assertEqual(
+            list(bot.histories["chat"]),
+            [
+                {"role": "user", "sender": "alice", "content": "你们公司是干什么的"},
+                {"role": "assistant", "sender": "self", "content": "我们做AI客服。"},
+            ],
+        )
 
     def test_queue_approval_writes_pending_reply_without_sending(self) -> None:
         chat = FakeChat()

@@ -17,6 +17,7 @@ def make_config(**overrides: object) -> AppConfig:
         wechat_listen_chats=["chat"],
         wechat_self_names=[],
         max_context_messages=8,
+        message_buffer_seconds=3,
         dedup_window_seconds=60,
         dry_run=True,
         system_prompt="system",

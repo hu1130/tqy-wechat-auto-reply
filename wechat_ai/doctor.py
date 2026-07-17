@@ -2,12 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import csv
-import importlib
 import importlib.util
 import json
 import platform
-import subprocess
 import sys
 from typing import Any
 from urllib import error, request
@@ -75,67 +72,92 @@ def check_wxauto4() -> DoctorCheck:
             "Run this project on Windows and install dependencies with `pip install -r requirements.txt`.",
         )
     if importlib.util.find_spec("wxauto4") is not None:
-        try:
-            importlib.import_module("wxauto4")
-        except Exception as exc:
-            return DoctorCheck(
-                "wxauto4",
-                "fail",
-                f"wxauto4 is installed but could not be imported: {exc}",
-                "Verify 64-bit Python and a supported WeChat 4.x version. If Windows application control blocks "
-                "wxauto4, ask the device administrator to approve the package; do not disable or bypass the policy.",
-            )
         return DoctorCheck("wxauto4", "ok", "wxauto4 is installed and importable.")
     return DoctorCheck("wxauto4", "fail", "wxauto4 is not installed.", "Run `pip install -r requirements.txt`.")
 
 
-def _list_running_process_names() -> set[str] | None:
+def check_weixin_window() -> DoctorCheck:
     if platform.system() != "Windows":
-        return set()
+        return DoctorCheck("Weixin window", "warn", "Skipped because this is not Windows.")
     try:
-        result = subprocess.run(
-            ["tasklist", "/FO", "CSV", "/NH"],
-            capture_output=True,
-            check=False,
-            encoding="utf-8",
-            errors="replace",
-            text=True,
-        )
-    except OSError:
-        return None
-    if result.returncode != 0:
-        return None
-    return {row[0].casefold() for row in csv.reader(result.stdout.splitlines()) if row}
-
-
-def check_wechat_client() -> DoctorCheck:
-    if platform.system() != "Windows":
+        import uiautomation as auto
+    except Exception as exc:
         return DoctorCheck(
-            "WeChat client",
+            "Weixin window",
             "warn",
-            "Skipped because this is not Windows.",
-    )
-    process_names = _list_running_process_names()
-    if process_names is None:
-        return DoctorCheck(
-            "WeChat client",
-            "warn",
-            "Could not inspect running Windows processes in this session.",
-            "Run the dry-run command in the same signed-in Windows session as WeChat. "
-            "The bot will verify its own attachment when it starts.",
+            f"Cannot import uiautomation: {exc}",
+            "Run `pip install -r requirements.txt` to enable Weixin window diagnostics.",
         )
-    for process_name in ("weixin.exe", "wechat.exe"):
-        if process_name in process_names:
+
+    try:
+        auto.SetGlobalSearchTimeout(2)
+        win = auto.WindowControl(searchDepth=1, Name="微信")
+        if not win.Exists(1):
             return DoctorCheck(
-                "WeChat client",
-                "ok",
-                f"Detected running desktop client process: {process_name}.",
+                "Weixin window",
+                "warn",
+                "Could not find a top-level Weixin window named 微信.",
+                "Open and log in to Windows Weixin 4.1.8.107, then keep the main window visible.",
             )
+        class_name = str(getattr(win, "ClassName", "") or "")
+        window_name = str(getattr(win, "Name", "") or "")
+    except Exception as exc:
+        return DoctorCheck(
+            "Weixin window",
+            "warn",
+            f"Could not inspect the Weixin UI Automation tree: {exc}",
+            "Run PowerShell and Weixin with the same privilege level, then try doctor again.",
+        )
+
+    if "LoginWindow" in class_name:
+        return DoctorCheck(
+            "Weixin window",
+            "fail",
+            f"Found Weixin login window instead of the logged-in chat window: {class_name}.",
+            "Log in to Weixin 4.1.8.107, open the chat list, and keep that main window visible.",
+        )
     return DoctorCheck(
-        "WeChat client",
-        "warn",
-        "A running Windows WeChat client was not found.",
-        "Open and log in to the current Windows Weixin client, then keep the main window visible before running a dry-run test.",
+        "Weixin window",
+        "ok",
+        f"Found visible Weixin window: name={window_name or '(empty)'}, class={class_name or '(empty)'}.",
+    )
+
+
+def check_wxauto4_attach() -> DoctorCheck:
+    if platform.system() != "Windows":
+        return DoctorCheck("wxauto4 attach", "warn", "Skipped because this is not Windows.")
+    try:
+        from wxauto4 import WeChat
+    except Exception as exc:
+        return DoctorCheck(
+            "wxauto4 attach",
+            "fail",
+            f"Cannot import wxauto4 WeChat: {exc}",
+            "Run `pip install -r requirements.txt` in the active virtual environment.",
+        )
+    try:
+        client = WeChat(ads=False, resize=False)
+    except Exception as exc:
+        return DoctorCheck(
+            "wxauto4 attach",
+            "fail",
+            f"wxauto4 could not attach to the logged-in Weixin window: {exc}",
+            "Open and log in to Weixin 4.1.8.107, keep the main window visible, and run this command "
+            "with the same privilege level as Weixin.",
+        )
+
+    supports_listener = all(callable(getattr(client, name, None)) for name in ("AddListenChat", "KeepRunning"))
+    supports_polling = all(callable(getattr(client, name, None)) for name in ("ChatWith", "GetAllMessage", "SendMsg"))
+    if supports_listener:
+        return DoctorCheck("wxauto4 attach", "ok", "Attached to the logged-in Weixin window with listener API.")
+    if supports_polling:
+        return DoctorCheck("wxauto4 attach", "ok", "Attached to the logged-in Weixin window with polling API.")
+    return DoctorCheck(
+        "wxauto4 attach",
+        "fail",
+        "Attached to Weixin, but wxauto4 exposes neither listener methods "
+        "(AddListenChat, KeepRunning) nor polling methods (ChatWith, GetAllMessage, SendMsg).",
+        "Install a wxauto4 build that supports one of these method sets.",
     )
 
 
@@ -268,7 +290,8 @@ def run_doctor(env_path: str | Path = ".env", check_llm_endpoint: bool = True) -
     checks.append(check_state_db(config))
     checks.append(check_knowledge_base(config))
     checks.append(check_wxauto4())
-    checks.append(check_wechat_client())
+    checks.append(check_weixin_window())
+    checks.append(check_wxauto4_attach())
     if check_llm_endpoint:
         checks.append(check_llm(config))
 

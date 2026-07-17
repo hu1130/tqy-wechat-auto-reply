@@ -17,6 +17,22 @@ class ChatState:
     last_reply_at: float = 0.0
 
 
+@dataclass(frozen=True)
+class Customer:
+    chat_name: str
+    display_name: str = ""
+    phone: str = ""
+    source: str = "wechat_desktop"
+    tags: str = ""
+    lead_level: str = "unknown"
+    status: str = "new"
+    owner: str = ""
+    notes: str = ""
+    welcome_sent_at: str = ""
+    updated_at: str = ""
+    created_at: str = ""
+
+
 class SQLiteStore:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
@@ -54,9 +70,29 @@ class SQLiteStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS customers (
+                    chat_name TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL DEFAULT '',
+                    phone TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT 'wechat_desktop',
+                    tags TEXT NOT NULL DEFAULT '',
+                    lead_level TEXT NOT NULL DEFAULT 'unknown',
+                    status TEXT NOT NULL DEFAULT 'new',
+                    owner TEXT NOT NULL DEFAULT '',
+                    notes TEXT NOT NULL DEFAULT '',
+                    welcome_sent_at TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            self._ensure_column(conn, "customers", "welcome_sent_at", "TEXT NOT NULL DEFAULT ''")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_chat_ts ON events(chat_name, ts)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_action_ts ON events(action, ts)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_customers_lead ON customers(lead_level, status)")
 
     def get_chat_state(self, chat_name: str) -> ChatState:
         with self._connect() as conn:
@@ -90,6 +126,35 @@ class SQLiteStore:
     def touch_last_reply(self, chat_name: str, timestamp: float) -> None:
         self._upsert_chat_state(chat_name=chat_name, last_reply_at=timestamp)
 
+    def has_sent_welcome(self, chat_name: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT welcome_sent_at FROM customers WHERE chat_name = ?",
+                (chat_name,),
+            ).fetchone()
+        return bool(row and str(row["welcome_sent_at"]))
+
+    def mark_welcome_sent(self, chat_name: str, timestamp: str | None = None) -> None:
+        now = timestamp or self._now()
+        with self._connect() as conn:
+            existing = conn.execute("SELECT chat_name FROM customers WHERE chat_name = ?", (chat_name,)).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE customers SET welcome_sent_at = ?, updated_at = ? WHERE chat_name = ?",
+                    (now, now, chat_name),
+                )
+                return
+            conn.execute(
+                """
+                INSERT INTO customers (
+                    chat_name, display_name, source, lead_level, status,
+                    welcome_sent_at, updated_at, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (chat_name, chat_name, "wechat_desktop", "unknown", "new", now, now, now),
+            )
+
     def record_event(self, event: dict[str, Any]) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -113,6 +178,9 @@ class SQLiteStore:
                     str(event.get("reply_preview", "")),
                 ),
             )
+            chat_name = str(event.get("chat_name", "")).strip()
+            if chat_name:
+                self._upsert_customer_from_event(conn, event)
 
     def count_sent(self, report_date: str | None = None, chat_name: str = "") -> int:
         selected_date = report_date or date.today().isoformat()
@@ -179,6 +247,242 @@ class SQLiteStore:
             )
             for row in rows
         ]
+
+    def list_recent_events(self, limit: int = 100, chat_name: str = "") -> list[dict[str, Any]]:
+        sql = """
+            SELECT id, ts, action, chat_name, sender, msg_type, policy, reason, sent,
+                   content_preview, reply_preview
+            FROM events
+        """
+        params: list[object] = []
+        if chat_name:
+            sql += " WHERE chat_name = ?"
+            params.append(chat_name)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(max(1, limit))
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [
+            {
+                "id": int(row["id"]),
+                "ts": str(row["ts"]),
+                "action": str(row["action"]),
+                "chat_name": str(row["chat_name"]),
+                "sender": str(row["sender"]),
+                "msg_type": str(row["msg_type"]),
+                "policy": str(row["policy"]),
+                "reason": str(row["reason"]),
+                "sent": None if row["sent"] is None else bool(row["sent"]),
+                "content_preview": str(row["content_preview"]),
+                "reply_preview": str(row["reply_preview"]),
+            }
+            for row in rows
+        ]
+
+    def chat_overview(self, limit: int = 100) -> list[dict[str, Any]]:
+        states = {state.chat_name: state for state in self.list_chat_states()}
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT chat_name,
+                       MAX(ts) AS last_event_at,
+                       SUM(CASE WHEN action = 'send' AND sent = 1 THEN 1 ELSE 0 END) AS sent_count,
+                       SUM(CASE WHEN action = 'skip' THEN 1 ELSE 0 END) AS skip_count
+                FROM events
+                WHERE chat_name != ''
+                GROUP BY chat_name
+                ORDER BY last_event_at DESC
+                LIMIT ?
+                """,
+                (max(1, limit),),
+            ).fetchall()
+        names = set(states)
+        names.update(str(row["chat_name"]) for row in rows)
+        by_name = {str(row["chat_name"]): row for row in rows}
+        overview: list[dict[str, Any]] = []
+        def last_event_at(name: str) -> str:
+            row = by_name.get(name)
+            return str(row["last_event_at"]) if row else ""
+
+        for chat_name in sorted(names, key=last_event_at, reverse=True):
+            state = states.get(chat_name, ChatState(chat_name=chat_name))
+            row = by_name.get(chat_name)
+            overview.append(
+                {
+                    "chat_name": chat_name,
+                    "policy": state.policy,
+                    "paused": state.paused,
+                    "pause_reason": state.pause_reason,
+                    "last_reply_at": state.last_reply_at,
+                    "last_event_at": str(row["last_event_at"]) if row else "",
+                    "sent_count": int(row["sent_count"] or 0) if row else 0,
+                    "skip_count": int(row["skip_count"] or 0) if row else 0,
+                }
+            )
+        return overview
+
+    def upsert_customer(
+        self,
+        chat_name: str,
+        display_name: str = "",
+        phone: str = "",
+        source: str = "wechat_desktop",
+        tags: str = "",
+        lead_level: str = "unknown",
+        status: str = "new",
+        owner: str = "",
+        notes: str = "",
+    ) -> None:
+        if not chat_name.strip():
+            raise RuntimeError("chat_name is required.")
+        now = self._now()
+        with self._connect() as conn:
+            existing = conn.execute("SELECT created_at FROM customers WHERE chat_name = ?", (chat_name,)).fetchone()
+            conn.execute(
+                """
+                INSERT INTO customers (
+                    chat_name, display_name, phone, source, tags, lead_level,
+                    status, owner, notes, welcome_sent_at, updated_at, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chat_name) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    phone = excluded.phone,
+                    source = excluded.source,
+                    tags = excluded.tags,
+                    lead_level = excluded.lead_level,
+                    status = excluded.status,
+                    owner = excluded.owner,
+                    notes = excluded.notes,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    chat_name.strip(),
+                    display_name.strip(),
+                    phone.strip(),
+                    source.strip() or "wechat_desktop",
+                    tags.strip(),
+                    lead_level.strip() or "unknown",
+                    status.strip() or "new",
+                    owner.strip(),
+                    notes.strip(),
+                    self.get_customer(chat_name).welcome_sent_at if existing else "",
+                    now,
+                    str(existing["created_at"]) if existing else now,
+                ),
+            )
+
+    def get_customer(self, chat_name: str) -> Customer:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT chat_name, display_name, phone, source, tags, lead_level,
+                       status, owner, notes, welcome_sent_at, updated_at, created_at
+                FROM customers
+                WHERE chat_name = ?
+                """,
+                (chat_name,),
+            ).fetchone()
+        if row is None:
+            return Customer(chat_name=chat_name)
+        return self._customer_from_row(row)
+
+    def list_customers(self, limit: int = 200) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT c.chat_name, c.display_name, c.phone, c.source, c.tags,
+                       c.lead_level, c.status, c.owner, c.notes, c.welcome_sent_at, c.updated_at, c.created_at,
+                       MAX(e.ts) AS last_event_at,
+                       SUM(CASE WHEN e.action = 'send' AND e.sent = 1 THEN 1 ELSE 0 END) AS sent_count,
+                       SUM(CASE WHEN e.action = 'skip' THEN 1 ELSE 0 END) AS skip_count
+                FROM customers c
+                LEFT JOIN events e ON e.chat_name = c.chat_name
+                GROUP BY c.chat_name
+                ORDER BY COALESCE(last_event_at, c.updated_at) DESC
+                LIMIT ?
+                """,
+                (max(1, limit),),
+            ).fetchall()
+        return [
+            {
+                **self._customer_from_row(row).__dict__,
+                "last_event_at": str(row["last_event_at"] or ""),
+                "sent_count": int(row["sent_count"] or 0),
+                "skip_count": int(row["skip_count"] or 0),
+            }
+            for row in rows
+        ]
+
+    def _upsert_customer_from_event(self, conn: sqlite3.Connection, event: dict[str, Any]) -> None:
+        chat_name = str(event.get("chat_name", "")).strip()
+        if not chat_name:
+            return
+        now = str(event.get("ts") or self._now())
+        content = f"{event.get('content_preview', '')} {event.get('reply_preview', '')}"
+        inferred_level = self._infer_lead_level(content)
+        existing = conn.execute(
+            "SELECT lead_level, status, created_at FROM customers WHERE chat_name = ?",
+            (chat_name,),
+        ).fetchone()
+        if existing:
+            next_level = self._higher_lead_level(str(existing["lead_level"]), inferred_level)
+            conn.execute(
+                """
+                UPDATE customers
+                SET lead_level = ?, updated_at = ?
+                WHERE chat_name = ?
+                """,
+                (next_level, now, chat_name),
+            )
+            return
+        conn.execute(
+            """
+            INSERT INTO customers (
+                chat_name, display_name, source, lead_level, status, updated_at, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (chat_name, chat_name, "wechat_desktop", inferred_level, "new", now, now),
+        )
+
+    @staticmethod
+    def _infer_lead_level(text: str) -> str:
+        high_keywords = ("价格", "报价", "多少钱", "收费", "购买", "合同", "付款", "合作", "试用", "演示")
+        medium_keywords = ("了解", "介绍", "产品", "方案", "功能", "案例", "怎么做", "可以")
+        if any(keyword in text for keyword in high_keywords):
+            return "high"
+        if any(keyword in text for keyword in medium_keywords):
+            return "medium"
+        return "unknown"
+
+    @staticmethod
+    def _higher_lead_level(current: str, inferred: str) -> str:
+        rank = {"unknown": 0, "low": 1, "medium": 2, "high": 3}
+        return inferred if rank.get(inferred, 0) > rank.get(current, 0) else current
+
+    @staticmethod
+    def _customer_from_row(row: sqlite3.Row) -> Customer:
+        return Customer(
+            chat_name=str(row["chat_name"]),
+            display_name=str(row["display_name"]),
+            phone=str(row["phone"]),
+            source=str(row["source"]),
+            tags=str(row["tags"]),
+            lead_level=str(row["lead_level"]),
+            status=str(row["status"]),
+            owner=str(row["owner"]),
+            notes=str(row["notes"]),
+            welcome_sent_at=str(row["welcome_sent_at"]),
+            updated_at=str(row["updated_at"]),
+            created_at=str(row["created_at"]),
+        )
+
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        columns = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def _upsert_chat_state(
         self,

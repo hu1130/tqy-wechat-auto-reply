@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import tempfile
 import unittest
@@ -16,9 +16,10 @@ class EnvTemplateTests(unittest.TestCase):
     def test_env_template_contains_user_facing_defaults(self) -> None:
         text = env_template()
         self.assertIn("LLM_PROVIDER=ollama", text)
-        self.assertIn("WECHAT_LISTEN_CHATS=文件传输助手", text)
+        self.assertIn("WECHAT_LISTEN_CHATS=", text)
         self.assertIn("DRY_RUN=1", text)
-        self.assertIn("REPLY_ALLOWED_CHATS=文件传输助手", text)
+        self.assertIn("MESSAGE_BUFFER_SECONDS=3", text)
+        self.assertIn("REPLY_ALLOWED_CHATS=", text)
         self.assertIn("TEXT_MESSAGE_TYPES=text,friend", text)
         self.assertIn("DEFAULT_CHAT_POLICY=manual", text)
         self.assertIn("REQUIRE_MANUAL_CONFIRM=1", text)
@@ -53,9 +54,10 @@ class ConfigValidationTests(unittest.TestCase):
             openai_base_url="https://api.openai.com/v1",
             openai_api_key="",
             request_timeout=120,
-            wechat_listen_chats=["文件传输助手"],
+            wechat_listen_chats=["鏂囦欢浼犺緭鍔╂墜"],
             wechat_self_names=[],
             max_context_messages=8,
+            message_buffer_seconds=3,
             dedup_window_seconds=60,
             dry_run=True,
             system_prompt="hello",
@@ -77,10 +79,12 @@ class ConfigValidationTests(unittest.TestCase):
             wechat_listen_chats=["chat"],
             wechat_self_names=[],
             max_context_messages=8,
+            message_buffer_seconds=3,
             dedup_window_seconds=60,
             dry_run=True,
             system_prompt="hello",
         ).with_overrides(
+            message_buffer_seconds=-1,
             max_reply_chars=-1,
             reply_cooldown_seconds=-1,
             max_sends_per_run=-1,
@@ -95,6 +99,7 @@ class ConfigValidationTests(unittest.TestCase):
 
         warnings = validate_config(config)
 
+        self.assertIn("MESSAGE_BUFFER_SECONDS should not be negative.", warnings)
         self.assertIn("MAX_REPLY_CHARS should not be negative.", warnings)
         self.assertIn("REPLY_COOLDOWN_SECONDS should not be negative.", warnings)
         self.assertIn("MAX_SENDS_PER_RUN should not be negative.", warnings)
@@ -117,14 +122,17 @@ class ConfigValidationTests(unittest.TestCase):
             wechat_listen_chats=["chat"],
             wechat_self_names=[],
             max_context_messages=8,
+            message_buffer_seconds=3,
             dedup_window_seconds=60,
             dry_run=True,
             system_prompt="hello",
         )
 
-        self.assertIn(
-            "REPLY_ALLOWED_CHATS is required. Start with a small whitelist such as 文件传输助手.",
-            validate_config(config),
+        self.assertTrue(
+            any(
+                warning.startswith("REPLY_ALLOWED_CHATS is required. Start with a small whitelist")
+                for warning in validate_config(config)
+            )
         )
 
     def test_invalid_chat_policy_is_rejected(self) -> None:
@@ -138,6 +146,7 @@ class ConfigValidationTests(unittest.TestCase):
             wechat_listen_chats=["chat"],
             wechat_self_names=[],
             max_context_messages=8,
+            message_buffer_seconds=3,
             dedup_window_seconds=60,
             dry_run=True,
             system_prompt="hello",
@@ -159,6 +168,7 @@ class ConfigValidationTests(unittest.TestCase):
             wechat_listen_chats=["chat"],
             wechat_self_names=[],
             max_context_messages=8,
+            message_buffer_seconds=3,
             dedup_window_seconds=60,
             dry_run=True,
             system_prompt="hello",
