@@ -80,4 +80,3 @@ class MessageDeduplicator:
 
 def append_history(history: deque[dict[str, str]], role: str, sender: str, content: str) -> None:
     history.append({"role": role, "sender": sender, "content": content})
-

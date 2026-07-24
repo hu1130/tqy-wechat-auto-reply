@@ -36,6 +36,16 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("setup_test_environment.ps1", text)
         self.assertIn("ExecutionPolicy Bypass", text)
 
+    def test_watchdog_restarts_stale_or_blocked_bot(self) -> None:
+        text = (ROOT / "run_watchdog.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("[string]$PythonPath", text)
+        self.assertIn('status -eq "blocked"', text)
+        self.assertIn("Health file is stale", text)
+        self.assertIn("Stop-Process -Id $process.Id -Force", text)
+        self.assertIn('[ValidateSet("local", "center")]', text)
+        self.assertIn('"connector", "run-center"', text)
+
 
 if __name__ == "__main__":
     unittest.main()

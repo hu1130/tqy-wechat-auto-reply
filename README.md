@@ -1,5 +1,30 @@
 # tqy-wechat-auto-reply
 
+Multi-tenant center and Windows Agent setup: [MULTI_TENANT.md](MULTI_TENANT.md)
+
+Production HTTPS deployment: [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)
+
+After the center starts, open `/admin` on the center domain for the tenant management console.
+
+## 多租户微信运营后台
+
+中心模式已经把微信运营配置放到 `/admin`：
+
+- 联系人策略：按微信账号查看好友和群聊，设置 `AI 自动回复`、`仅人工`、`暂停`、`屏蔽`。
+- 好友申请：通过选中、拒绝选中、按批通过、全部加入受限队列；“全部”不会立即连续点击微信。
+- 运营任务：查看领取、执行、成功、失败和 `uncertain`，支持取消、重试和人工确认。
+- 运营限制：每批数量、最小间隔、每小时/每日上限、欢迎语、通过后自动启用回复、全局暂停。
+
+中心模式默认没有联系人策略时不自动回复。只有后台明确设为 `AI 自动回复` 的联系人或群聊才会创建 AI 回复任务。
+
+Windows Agent 启动前必须通过：
+
+```powershell
+python main.py --env .env connector doctor
+```
+
+输出中的 `safe_to_run` 必须为 `true`，微信版本必须命中 `WECHAT_VERIFIED_VERSION_PREFIXES`，联系人扫描、好友申请扫描、接受和拒绝能力必须全部可用。未知版本或能力缺失时 Agent 会停止微信读写，不会自动降级继续操作。
+
 一个本地运行的微信 AI 自动回复工具。
 
 它会监听你指定的微信好友或微信群，把最近聊天上下文发给大模型，再把生成的回复发回微信。适合做客服辅助、私域消息初筛、社群答疑、个人微信助理等场景。
@@ -366,11 +391,16 @@ python main.py admin report --save
 ```powershell
 start_prod.bat
 .\run_watchdog.ps1 -Live
+python main.py agent install
+python main.py agent status
+python main.py agent backup
 save_daily_report.bat
 ```
 
 - `start_prod.bat`：交互确认后启动生产 watchdog。
 - `run_watchdog.ps1`：启动前运行 `doctor --skip-llm`，机器人异常退出后自动重启，并限制每小时重启次数。
+- `python main.py agent install`：安装登录当前 Windows 用户后自动启动的隐藏 watchdog 任务；它运行在可操作微信窗口的交互桌面会话中，不是 Session 0 服务。
+- `python main.py agent backup`：创建经过完整性检查的 SQLite 快照，并按 `STATE_DB_BACKUP_RETENTION` 清理旧备份。
 - `save_daily_report.bat`：保存当天日报到 `REPORTS_DIR`，适合放进 Windows 任务计划每天执行。
 
 日志和审计会自动脱敏手机号、身份证、银行卡、邮箱和验证码；完整敏感信息不应落盘。

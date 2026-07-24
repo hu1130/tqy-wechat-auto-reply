@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+from pathlib import Path
 import sys
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -18,14 +20,41 @@ from wechat_ai.admin import (
     save_daily_report,
     set_chat_policy,
 )
+from wechat_ai.agent_activation import activate_and_save, resolve_center_url
+from wechat_ai.agent_profile import AgentProfileStore, public_profile_status
 from wechat_ai.bot import WeChatAutoReplyBot
 from wechat_ai.config import load_config
-from wechat_ai.connector_agent import connector_compatibility, connector_status, list_connectors, run_local_connector_agent
+from wechat_ai.center_runtime import (
+    bootstrap_tenant,
+    build_center_application,
+    center_diagnostics,
+    center_service_readiness,
+)
+from wechat_ai.center_server import run_center_production_server, run_center_server
+from wechat_ai.center_worker import CenterReplyWorker
+from wechat_ai.connector_agent import (
+    connector_compatibility,
+    connector_status,
+    list_connectors,
+    run_center_connector_agent,
+    run_local_connector_agent,
+)
 from wechat_ai.doctor import run_doctor
+from wechat_ai.friend_requests import accept_friend_requests
+from wechat_ai.image_probe import run_image_probe
 from wechat_ai.llm import LLMClient
+from wechat_ai.single_instance import SingleInstanceLock
 from wechat_ai.simulator import StaticReplyClient, simulate_message
 from wechat_ai.web_admin import run_dashboard_server
+from wechat_ai.windows_agent import (
+    DEFAULT_TASK_NAME,
+    WindowsAgentTask,
+    WindowsTaskScheduler,
+    backup_sqlite_database,
+)
 from wechat_ai.wizard import init_env
+from wechat_ai.tenant_auth import ApiKeyManager, SecretCipher
+from wechat_ai.tenant_store import TenantStore
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -74,6 +103,23 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser = subparsers.add_parser("doctor", help="Check whether the bot can run")
     doctor_parser.add_argument("--skip-llm", action="store_true", help="Do not check the LLM endpoint")
 
+    image_probe_parser = subparsers.add_parser("image-probe", help="Inspect wxauto4 image messages in one chat")
+    image_probe_parser.add_argument("--chat", required=True, help="Chat name to watch while you send an image")
+    image_probe_parser.add_argument("--seconds", type=int, default=60, help="How long to watch, default: 60 seconds")
+    image_probe_parser.add_argument("--interval", type=float, default=2.0, help="Polling interval seconds")
+    image_probe_parser.add_argument("--out", default="logs", help="Directory for image probe JSON output")
+
+    friends_parser = subparsers.add_parser("friends", help="Scan or accept visible WeChat friend requests")
+    friends_mode = friends_parser.add_mutually_exclusive_group()
+    friends_mode.add_argument("--dry-run", action="store_true", help="Only scan friend request accept buttons")
+    friends_mode.add_argument("--live", action="store_true", help="Click accept buttons for friend requests")
+    friends_parser.add_argument("--limit", type=int, default=10, help="Maximum friend requests to accept")
+    friends_parser.add_argument(
+        "--no-switch",
+        action="store_true",
+        help="Do not switch to contacts page first; scan the current WeChat screen",
+    )
+
     admin_parser = subparsers.add_parser("admin", help="Manage runtime state")
     admin_subparsers = admin_parser.add_subparsers(dest="admin_command")
     admin_subparsers.add_parser("status", help="Show persisted chat state")
@@ -120,6 +166,64 @@ def build_parser() -> argparse.ArgumentParser:
     connector_run_parser.add_argument("--channel", default="wechat_desktop", help="Connector channel")
     connector_run_parser.add_argument("--interval", type=float, default=1.0, help="Polling interval seconds")
     connector_run_parser.add_argument("--echo", action="store_true", help="Echo inbound messages back through the connector")
+    connector_center_parser = connector_subparsers.add_parser(
+        "run-center",
+        help="Run the persistent Windows connector Agent against the center service",
+    )
+    connector_center_parser.add_argument("--id", default="local-wechat-desktop", help="Connector id")
+    connector_center_parser.add_argument("--channel", default="wechat_desktop", help="Connector channel")
+    connector_center_parser.add_argument("--interval", type=float, default=1.0, help="Polling interval seconds")
+
+    center_parser = subparsers.add_parser("center", help="Manage the multi-tenant center service")
+    center_subparsers = center_parser.add_subparsers(dest="center_command")
+    center_subparsers.add_parser("init-db", help="Upgrade the center database to migration head")
+    center_subparsers.add_parser("db-status", help="Show current and head database revisions")
+    center_subparsers.add_parser("doctor", help="Check center secrets, database, and schema")
+    center_serve = center_subparsers.add_parser("serve", help="Run the center HTTP API")
+    center_serve.add_argument(
+        "--production",
+        action="store_true",
+        help="Use the production WSGI server instead of the development HTTP server",
+    )
+    center_serve.add_argument("--threads", type=int, default=8, help="Production server worker threads")
+    center_bootstrap = center_subparsers.add_parser(
+        "bootstrap",
+        help="Create one tenant, owner, WeChat account, and Agent credentials",
+    )
+    center_bootstrap.add_argument("--tenant-slug", required=True)
+    center_bootstrap.add_argument("--tenant-name", required=True)
+    center_bootstrap.add_argument("--owner-email", required=True)
+    center_bootstrap.add_argument("--wechat-account-id", required=True)
+    center_bootstrap.add_argument("--agent-external-id", required=True)
+    center_bootstrap.add_argument("--agent-name", default="")
+
+    agent_parser = subparsers.add_parser("agent", help="Manage the unattended Windows desktop agent")
+    agent_subparsers = agent_parser.add_subparsers(dest="agent_command")
+    agent_activate = agent_subparsers.add_parser("activate", help="Activate this Windows Agent")
+    agent_activate.add_argument("--code", required=True, help="One-time activation code")
+    agent_activate.add_argument(
+        "--center-url",
+        help="Center URL; defaults to the installer build or WECHAT_AGENT_CENTER_URL",
+    )
+    agent_run = agent_subparsers.add_parser("run", help="Run the activated center Agent")
+    agent_run.add_argument("--id", default="local-wechat-desktop", help="Connector id")
+    agent_run.add_argument("--channel", default="wechat_desktop", help="Connector channel")
+    agent_run.add_argument("--interval", type=float, default=1.0, help="Polling interval seconds")
+    agent_install = agent_subparsers.add_parser("install", help="Install current-user logon task")
+    agent_install.add_argument("--task-name", default=DEFAULT_TASK_NAME)
+    agent_install.add_argument(
+        "--mode",
+        choices=("local", "center"),
+        help="Start the local bot or center Agent; activated installs default to center",
+    )
+    agent_uninstall = agent_subparsers.add_parser("uninstall", help="Remove current-user logon task")
+    agent_uninstall.add_argument("--task-name", default=DEFAULT_TASK_NAME)
+    agent_status = agent_subparsers.add_parser("status", help="Show current-user logon task status")
+    agent_status.add_argument("--task-name", default=DEFAULT_TASK_NAME)
+    agent_subparsers.add_parser("backup", help="Create and verify a state database snapshot")
+    agent_subparsers.add_parser("show-config", help="Show redacted secure Agent binding status")
+    agent_reset = agent_subparsers.add_parser("reset", help="Remove the secure Agent binding")
+    agent_reset.add_argument("--yes", action="store_true", help="Remove the binding without prompting")
     return parser
 
 
@@ -148,8 +252,13 @@ def run_wechat_bot(
     if chats:
         config = config.with_overrides(wechat_listen_chats=chats)
 
-    bot = WeChatAutoReplyBot(config=config, llm_client=LLMClient(config))
-    bot.start()
+    state_db = Path(config.state_db_file).expanduser().resolve() if config.state_db_file else None
+    if state_db and state_db.is_file():
+        backup_sqlite_database(state_db, keep=config.state_db_backup_retention)
+
+    with SingleInstanceLock.from_config(config, env_path):
+        bot = WeChatAutoReplyBot(config=config, llm_client=LLMClient(config))
+        bot.start()
     return 0
 
 
@@ -226,7 +335,13 @@ def run_dashboard_command(env_path: str, args: argparse.Namespace) -> int:
 
 
 def run_connector_command(env_path: str, args: argparse.Namespace) -> int:
-    config = load_config(env_path)
+    if args.connector_command in {"doctor", "run-center"}:
+        config = load_agent_runtime_config(
+            env_path,
+            require_binding=args.connector_command == "run-center",
+        )
+    else:
+        config = load_config(env_path)
     if args.connector_command == "list":
         print(json.dumps(list_connectors(), ensure_ascii=False, indent=2))
         return 0
@@ -237,15 +352,250 @@ def run_connector_command(env_path: str, args: argparse.Namespace) -> int:
         print(json.dumps(connector_compatibility(config, connector_id=args.id, channel=args.channel), ensure_ascii=False, indent=2))
         return 0
     if args.connector_command == "run-local":
-        run_local_connector_agent(
-            config,
-            connector_id=args.id,
-            channel=args.channel,
-            interval_seconds=args.interval,
-            echo=bool(args.echo),
+        with SingleInstanceLock.from_config(config, env_path):
+            run_local_connector_agent(
+                config,
+                connector_id=args.id,
+                channel=args.channel,
+                interval_seconds=args.interval,
+                echo=bool(args.echo),
+            )
+        return 0
+    if args.connector_command == "run-center":
+        with SingleInstanceLock.from_config(config, env_path):
+            run_center_connector_agent(
+                config,
+                connector_id=args.id,
+                channel=args.channel,
+                interval_seconds=args.interval,
+            )
+        return 0
+    raise RuntimeError("Missing connector command. Use list, status, doctor, run-local, or run-center.")
+
+
+def _agent_connection_values(config: object) -> tuple[object, ...]:
+    return tuple(
+        getattr(config, name, "")
+        for name in (
+            "agent_center_url",
+            "agent_tenant_id",
+            "agent_instance_id",
+            "agent_channel_account_id",
+            "agent_token",
+        )
+    )
+
+
+def load_agent_runtime_config(
+    env_path: str,
+    *,
+    require_binding: bool,
+    store: AgentProfileStore | None = None,
+) -> object:
+    config = load_config(env_path)
+    connection_values = _agent_connection_values(config)
+    if all(connection_values):
+        return config
+    if any(connection_values):
+        if require_binding:
+            raise RuntimeError(
+                "Agent environment configuration is incomplete; configure all AGENT_* values "
+                "or remove them and run `agent activate`."
+            )
+        return config
+
+    try:
+        profile_store = store or AgentProfileStore()
+    except RuntimeError:
+        if require_binding:
+            raise
+        return config
+    if not profile_store.is_activated():
+        if require_binding:
+            raise RuntimeError("Agent is not activated. Run `agent activate` first.")
+        return config
+    profile = profile_store.load()
+    return config.with_overrides(**profile_store.config_overrides(profile))
+
+
+def run_center_command(env_path: str, args: argparse.Namespace) -> int:
+    config = load_config(env_path)
+    if args.center_command == "doctor":
+        report = center_diagnostics(
+            config.center_database_url,
+            config.center_api_key_pepper,
+            config.center_secret_key,
+            config.center_provisioning_token,
+            previous_api_key_peppers=config.center_api_key_previous_peppers,
+        )
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if report["ok"] else 1
+    if not config.center_database_url:
+        raise RuntimeError("CENTER_DATABASE_URL is required")
+
+    if args.center_command == "db-status":
+        from wechat_ai.center_migrations import migration_status
+
+        store = TenantStore(config.center_database_url)
+        try:
+            status = migration_status(store.engine)
+            print(json.dumps(status.to_dict(), ensure_ascii=False, indent=2))
+        finally:
+            store.engine.dispose()
+        return 0 if status.at_head and status.schema_valid else 1
+    if args.center_command == "init-db":
+        from wechat_ai.center_migrations import migration_status
+
+        store = TenantStore(config.center_database_url)
+        try:
+            store.create_schema()
+            status = migration_status(store.engine)
+            print(json.dumps(status.to_dict(), ensure_ascii=False, indent=2))
+        finally:
+            store.engine.dispose()
+        return 0
+    if not config.center_api_key_pepper:
+        raise RuntimeError("CENTER_API_KEY_PEPPER is required")
+    if args.center_command == "bootstrap":
+        store = TenantStore(config.center_database_url)
+        store.create_schema()
+        result = bootstrap_tenant(
+            store,
+            ApiKeyManager(config.center_api_key_pepper),
+            tenant_slug=args.tenant_slug,
+            tenant_name=args.tenant_name,
+            owner_email=args.owner_email,
+            channel="wechat_desktop",
+            external_account_id=args.wechat_account_id,
+            agent_external_id=args.agent_external_id,
+            agent_name=args.agent_name,
+        )
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+        print("Store tenant_api_key and agent_token now; plaintext values are not retained.")
+        return 0
+    if args.center_command == "serve":
+        if args.production and not config.center_provisioning_token:
+            raise RuntimeError("CENTER_PROVISIONING_TOKEN is required in production")
+        store, application = build_center_application(
+            config.center_database_url,
+            config.center_api_key_pepper,
+            config.center_secret_key,
+            provisioning_token=config.center_provisioning_token,
+            previous_api_key_peppers=config.center_api_key_previous_peppers,
+        )
+        worker = CenterReplyWorker(store, config, SecretCipher(config.center_secret_key))
+        application.readiness_probe = lambda: center_service_readiness(store, worker)
+        server_runner = run_center_production_server if args.production else run_center_server
+        server_options = {"threads": args.threads} if args.production else {}
+        server_runner(
+            application,
+            host=config.center_host,
+            port=config.center_port,
+            background_runner=worker.run_forever,
+            **server_options,
         )
         return 0
-    raise RuntimeError("Missing connector command. Use list, status, doctor, or run-local.")
+    raise RuntimeError("Missing center command. Use init-db, db-status, doctor, bootstrap, or serve.")
+
+
+def run_agent_command(env_path: str, args: argparse.Namespace) -> int:
+    project_dir = Path(__file__).resolve().parent
+    if args.agent_command == "activate":
+        center_url = resolve_center_url(args.center_url)
+        store = AgentProfileStore()
+        activate_and_save(
+            activation_code=args.code,
+            center_url=center_url,
+            store=store,
+        )
+        print("Windows Agent activation completed. Credentials are protected for the current user.")
+        return 0
+    if args.agent_command == "show-config":
+        print(json.dumps(public_profile_status(AgentProfileStore()), ensure_ascii=False, indent=2))
+        return 0
+    if args.agent_command == "reset":
+        store = AgentProfileStore()
+        if not args.yes:
+            try:
+                answer = input("Remove this Agent binding? Type YES to continue: ")
+            except EOFError:
+                raise RuntimeError("Confirmation is required; use --yes for unattended reset.") from None
+            if answer.strip() != "YES":
+                print("Agent binding was not changed.")
+                return 0
+        removed = store.reset_binding()
+        print("Agent binding removed." if removed else "Agent is not activated.")
+        return 0
+    if args.agent_command == "run":
+        config = load_agent_runtime_config(env_path, require_binding=True)
+        with SingleInstanceLock.from_config(config, env_path):
+            run_center_connector_agent(
+                config,
+                connector_id=args.id,
+                channel=args.channel,
+                interval_seconds=args.interval,
+            )
+        return 0
+
+    config = load_config(env_path)
+    if args.agent_command == "backup":
+        if not config.state_db_file:
+            raise RuntimeError("STATE_DB_FILE is required for database backup.")
+        database_path = Path(config.state_db_file).expanduser().resolve()
+        backup = backup_sqlite_database(
+            database_path,
+            keep=config.state_db_backup_retention,
+        )
+        print(str(backup))
+        return 0
+
+    task_name = str(getattr(args, "task_name", DEFAULT_TASK_NAME))
+    scheduler = WindowsTaskScheduler()
+    if args.agent_command == "install":
+        requested_mode = getattr(args, "mode", None)
+        store = AgentProfileStore()
+        has_profile = store.is_activated()
+        has_env_binding = all(_agent_connection_values(config))
+        mode = requested_mode or ("center" if has_profile or has_env_binding else "local")
+        if mode == "center":
+            load_agent_runtime_config(env_path, require_binding=True, store=store)
+        env_file = Path(env_path).expanduser().resolve()
+        if mode == "center" and not env_file.is_file() and not has_profile:
+            raise RuntimeError(
+                "A persistent Agent binding is required for installation; run `agent activate` first."
+            )
+        resolved_env = (
+            env_file
+            if env_file.is_file() or mode == "local"
+            else store.ensure_runtime_marker()
+        )
+        pythonw_path = Path(sys.executable).with_name("pythonw.exe").resolve()
+        task = WindowsAgentTask(
+            project_dir=project_dir,
+            env_path=resolved_env,
+            pythonw_path=pythonw_path,
+            watchdog_path=project_dir / "run_watchdog.ps1",
+            powershell_path=Path(
+                os.environ.get("SystemRoot", r"C:\Windows")
+            ) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe",
+            mode=mode,
+            task_name=task_name,
+        )
+        scheduler.install(task)
+        print(f"Installed Windows desktop agent task: {task_name}")
+        return 0
+    if args.agent_command == "uninstall":
+        scheduler.uninstall(task_name)
+        print(f"Removed Windows desktop agent task: {task_name}")
+        return 0
+    if args.agent_command == "status":
+        result = scheduler.status(task_name)
+        print(result.stdout or "")
+        return 0
+    raise RuntimeError(
+        "Missing agent command. Use activate, run, install, uninstall, status, backup, "
+        "show-config, or reset."
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -269,7 +619,16 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         if args.command == "config":
-            config = load_config(args.env)
+            requested_path = Path(args.env).expanduser().resolve()
+            if requested_path.name == "agent.runtime":
+                profile_store = AgentProfileStore()
+                config = load_agent_runtime_config(
+                    args.env,
+                    require_binding=True,
+                    store=profile_store,
+                )
+            else:
+                config = load_config(args.env)
             print(json.dumps(config.to_public_dict(), ensure_ascii=False, indent=2))
             return 0
 
@@ -281,6 +640,24 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "doctor":
             return run_doctor(env_path=args.env, check_llm_endpoint=not args.skip_llm)
 
+        if args.command == "image-probe":
+            run_image_probe(
+                chat_name=args.chat,
+                seconds=args.seconds,
+                interval_seconds=args.interval,
+                output_dir=args.out,
+            )
+            return 0
+
+        if args.command == "friends":
+            result = accept_friend_requests(
+                live=bool(args.live),
+                limit=args.limit,
+                switch_to_contacts=not bool(args.no_switch),
+            )
+            print(json.dumps(result.__dict__, ensure_ascii=False, indent=2))
+            return 0
+
         if args.command == "admin":
             return run_admin_command(env_path=args.env, args=args)
 
@@ -289,6 +666,12 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "connector":
             return run_connector_command(env_path=args.env, args=args)
+
+        if args.command == "agent":
+            return run_agent_command(env_path=args.env, args=args)
+
+        if args.command == "center":
+            return run_center_command(env_path=args.env, args=args)
 
         return run_wechat_bot(
             env_path=args.env,

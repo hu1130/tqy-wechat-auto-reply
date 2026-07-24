@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
+from urllib import error
 
 from wechat_ai.llm import LLMClient
 
@@ -46,6 +48,38 @@ class SessionChatApiTests(unittest.TestCase):
         self.assertEqual(client.payload["message"], "price please")
         self.assertEqual(client.payload["preferred_language"], "zh-CN")
         self.assertEqual(client.headers, {"Content-Type": "application/json"})
+
+    def test_retryable_http_500_is_retried_before_success(self) -> None:
+        client = LLMClient(
+            SimpleNamespace(
+                request_timeout=120,
+            )
+        )  # type: ignore[arg-type]
+        calls = 0
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b'{"messages":[{"text":"ok after retry"}]}'
+
+        def fake_urlopen(req, timeout):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise error.HTTPError(req.full_url, 500, "err", {}, None)
+            return FakeResponse()
+
+        with patch("wechat_ai.llm.request.urlopen", side_effect=fake_urlopen):
+            with patch("wechat_ai.llm.time.sleep"):
+                result = client._post_json("https://example.test/v1/chat", {"a": 1}, {})
+
+        self.assertEqual(result["messages"][0]["text"], "ok after retry")
+        self.assertEqual(calls, 2)
 
 
 if __name__ == "__main__":

@@ -16,16 +16,24 @@ class EnvTemplateTests(unittest.TestCase):
     def test_env_template_contains_user_facing_defaults(self) -> None:
         text = env_template()
         self.assertIn("LLM_PROVIDER=ollama", text)
+        self.assertIn("CENTER_DATABASE_URL=", text)
+        self.assertIn("CENTER_PORT=8790", text)
+        self.assertIn("CENTER_PROVISIONING_TOKEN=", text)
+        self.assertIn("AGENT_CENTER_URL=", text)
+        self.assertIn("AGENT_SPOOL_FILE=data/agent-spool.sqlite3", text)
         self.assertIn("WECHAT_LISTEN_CHATS=", text)
         self.assertIn("DRY_RUN=1", text)
         self.assertIn("MESSAGE_BUFFER_SECONDS=3", text)
+        self.assertIn("OPERATOR_IDLE_GUARD_SECONDS=2", text)
+        self.assertIn("WECHAT_AUTO_ACTIVATE_WINDOW_ENABLED=1", text)
+        self.assertIn("WECHAT_AUTO_ACTIVATE_INTERVAL_SECONDS=3", text)
         self.assertIn("REPLY_ALLOWED_CHATS=", text)
         self.assertIn("TEXT_MESSAGE_TYPES=text,friend", text)
         self.assertIn("DEFAULT_CHAT_POLICY=manual", text)
         self.assertIn("REQUIRE_MANUAL_CONFIRM=1", text)
         self.assertIn("APPROVAL_MODE=console", text)
         self.assertIn("PENDING_REPLIES_FILE=logs/pending_replies.jsonl", text)
-        self.assertIn("MAX_SENDS_PER_RUN=20", text)
+        self.assertIn("MAX_SENDS_PER_RUN=0", text)
         self.assertIn("LOG_FILE=logs/wechat-ai.log", text)
         self.assertIn("AUDIT_LOG_FILE=logs/audit.jsonl", text)
         self.assertIn("ALERT_FILE=logs/alerts.log", text)
@@ -85,6 +93,7 @@ class ConfigValidationTests(unittest.TestCase):
             system_prompt="hello",
         ).with_overrides(
             message_buffer_seconds=-1,
+            wechat_auto_activate_interval_seconds=-1,
             max_reply_chars=-1,
             reply_cooldown_seconds=-1,
             max_sends_per_run=-1,
@@ -100,6 +109,7 @@ class ConfigValidationTests(unittest.TestCase):
         warnings = validate_config(config)
 
         self.assertIn("MESSAGE_BUFFER_SECONDS should not be negative.", warnings)
+        self.assertIn("WECHAT_AUTO_ACTIVATE_INTERVAL_SECONDS should not be negative.", warnings)
         self.assertIn("MAX_REPLY_CHARS should not be negative.", warnings)
         self.assertIn("REPLY_COOLDOWN_SECONDS should not be negative.", warnings)
         self.assertIn("MAX_SENDS_PER_RUN should not be negative.", warnings)
@@ -177,6 +187,56 @@ class ConfigValidationTests(unittest.TestCase):
         )
 
         self.assertIn("APPROVAL_MODE should be either 'console' or 'queue'.", validate_config(config))
+
+    def test_center_database_requires_postgres_and_secrets(self) -> None:
+        config = AppConfig(
+            llm_provider="ollama",
+            llm_model="model",
+            ollama_base_url="http://localhost:11434",
+            openai_base_url="https://api.openai.com/v1",
+            openai_api_key="",
+            request_timeout=120,
+            wechat_listen_chats=["chat"],
+            wechat_self_names=[],
+            max_context_messages=8,
+            message_buffer_seconds=3,
+            dedup_window_seconds=60,
+            dry_run=True,
+            system_prompt="system",
+            reply_allowed_chats=["chat"],
+            center_database_url="sqlite:///center.db",
+        )
+
+        warnings = validate_config(config)
+
+        self.assertIn("CENTER_DATABASE_URL must use postgresql+psycopg:// in production.", warnings)
+        self.assertIn("CENTER_API_KEY_PEPPER is required when CENTER_DATABASE_URL is configured.", warnings)
+        self.assertIn("CENTER_SECRET_KEY is required when CENTER_DATABASE_URL is configured.", warnings)
+
+    def test_agent_center_configuration_is_atomic_and_https_only(self) -> None:
+        config = AppConfig(
+            llm_provider="ollama",
+            llm_model="model",
+            ollama_base_url="http://localhost:11434",
+            openai_base_url="https://api.openai.com/v1",
+            openai_api_key="",
+            request_timeout=120,
+            wechat_listen_chats=["chat"],
+            wechat_self_names=[],
+            max_context_messages=8,
+            message_buffer_seconds=3,
+            dedup_window_seconds=60,
+            dry_run=True,
+            system_prompt="system",
+            reply_allowed_chats=["chat"],
+            agent_center_url="http://center.local",
+            agent_tenant_id="tenant-1",
+        )
+
+        warnings = validate_config(config)
+
+        self.assertTrue(any("must be configured together" in warning for warning in warnings))
+        self.assertIn("AGENT_CENTER_URL must use https://.", warnings)
 
 
 if __name__ == "__main__":
