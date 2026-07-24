@@ -44,7 +44,7 @@ class DoctorRenderTests(unittest.TestCase):
 
         self.assertEqual(check.status, "warn")
         self.assertIn("Could not find", check.detail)
-        self.assertIn("4.1.8.107", check.fix)
+        self.assertIn("tested Windows Weixin version", check.fix)
 
     def test_weixin_window_check_passes_when_window_exists(self) -> None:
         class MainWindow:

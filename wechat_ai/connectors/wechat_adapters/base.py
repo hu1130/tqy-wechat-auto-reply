@@ -13,6 +13,10 @@ class WeChatAdapterCapabilities:
     image_download: bool = False
     listener_api: bool = False
     polling_api: bool = False
+    contact_snapshot: bool = False
+    friend_request_scan: bool = False
+    friend_request_accept: bool = False
+    friend_request_reject: bool = False
 
 
 @dataclass(frozen=True)
@@ -48,6 +52,15 @@ class WeChatDesktopAdapter(Protocol):
         ...
 
     def send_text(self, content: str) -> None:
+        ...
+
+    def snapshot_contacts(self) -> list[dict[str, Any]]:
+        ...
+
+    def snapshot_friend_requests(self) -> list[dict[str, Any]]:
+        ...
+
+    def execute_operation(self, operation_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         ...
 
     def session_name(self, session: Any) -> str:

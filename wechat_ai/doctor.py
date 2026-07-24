@@ -12,6 +12,7 @@ from urllib import error, request
 from wechat_ai.config import AppConfig, load_config, validate_config
 from wechat_ai.knowledge import KnowledgeBase
 from wechat_ai.store import SQLiteStore
+from wechat_ai.wechat_runtime import detect_wechat_client_version
 
 
 @dataclass(frozen=True)
@@ -97,7 +98,7 @@ def check_weixin_window() -> DoctorCheck:
                 "Weixin window",
                 "warn",
                 "Could not find a top-level Weixin window named 微信.",
-                "Open and log in to Windows Weixin 4.1.8.107, then keep the main window visible.",
+                "Open and log in to a tested Windows Weixin version, then keep the main window visible.",
             )
         class_name = str(getattr(win, "ClassName", "") or "")
         window_name = str(getattr(win, "Name", "") or "")
@@ -114,7 +115,7 @@ def check_weixin_window() -> DoctorCheck:
             "Weixin window",
             "fail",
             f"Found Weixin login window instead of the logged-in chat window: {class_name}.",
-            "Log in to Weixin 4.1.8.107, open the chat list, and keep that main window visible.",
+            "Log in to a version listed in WECHAT_VERIFIED_VERSION_PREFIXES and keep the main window visible.",
         )
     return DoctorCheck(
         "Weixin window",
@@ -123,7 +124,7 @@ def check_weixin_window() -> DoctorCheck:
     )
 
 
-def check_wxauto4_attach() -> DoctorCheck:
+def check_wxauto4_attach(config: AppConfig | None = None) -> DoctorCheck:
     if platform.system() != "Windows":
         return DoctorCheck("wxauto4 attach", "warn", "Skipped because this is not Windows.")
     try:
@@ -142,9 +143,26 @@ def check_wxauto4_attach() -> DoctorCheck:
             "wxauto4 attach",
             "fail",
             f"wxauto4 could not attach to the logged-in Weixin window: {exc}",
-            "Open and log in to Weixin 4.1.8.107, keep the main window visible, and run this command "
+            "Open and log in to a tested Weixin version, keep the main window visible, and run this command "
             "with the same privilege level as Weixin.",
         )
+
+    if config is not None:
+        version = detect_wechat_client_version(client, config.wechat_client_version)
+        if not version:
+            return DoctorCheck(
+                "Weixin version",
+                "fail",
+                "Could not determine the desktop client version.",
+                "Set WECHAT_CLIENT_VERSION to the installed file version after checking Weixin.exe properties.",
+            )
+        if not any(version.startswith(prefix) for prefix in config.wechat_verified_version_prefixes):
+            return DoctorCheck(
+                "Weixin version",
+                "fail",
+                f"Client {version} is not in WECHAT_VERIFIED_VERSION_PREFIXES.",
+                "Run compatibility regression tests before adding this version to the verified list.",
+            )
 
     supports_listener = all(callable(getattr(client, name, None)) for name in ("AddListenChat", "KeepRunning"))
     supports_polling = all(callable(getattr(client, name, None)) for name in ("ChatWith", "GetAllMessage", "SendMsg"))
@@ -291,7 +309,7 @@ def run_doctor(env_path: str | Path = ".env", check_llm_endpoint: bool = True) -
     checks.append(check_knowledge_base(config))
     checks.append(check_wxauto4())
     checks.append(check_weixin_window())
-    checks.append(check_wxauto4_attach())
+    checks.append(check_wxauto4_attach(config))
     if check_llm_endpoint:
         checks.append(check_llm(config))
 

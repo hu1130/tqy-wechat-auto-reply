@@ -10,7 +10,7 @@ if not exist ".venv\Scripts\python.exe" (
 
 echo Production mode will keep the bot running under watchdog.
 echo Make sure .env uses a small whitelist and REQUIRE_MANUAL_CONFIRM=1 before live use.
-set /p CONFIRM=Type YES to start production watchdog: 
+set /p "CONFIRM=Type YES to start production watchdog: "
 if /i not "%CONFIRM%"=="YES" (
   echo Canceled.
   pause

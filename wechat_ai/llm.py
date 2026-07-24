@@ -1,16 +1,45 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 from urllib import request, error
 
 from wechat_ai.config import AppConfig
+from wechat_ai.reliability import CircuitBreaker, RetryPolicy, TokenBucketRateLimiter
 from wechat_ai.utils import build_history_prompt, strip_think_tags
+
+
+RETRYABLE_HTTP_STATUS = {429, 500, 502, 503, 504}
+
+
+class LLMRequestError(RuntimeError):
+    def __init__(self, message: str, *, retryable: bool, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        self.retry_after = retry_after
 
 
 class LLMClient:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
+        self._retry_policy = RetryPolicy(
+            max_attempts=max(1, int(getattr(config, "api_retry_attempts", 4))),
+            base_delay=float(getattr(config, "api_retry_base_delay_seconds", 1.0)),
+            max_delay=float(getattr(config, "api_retry_max_delay_seconds", 30.0)),
+            should_retry=lambda exc: isinstance(exc, LLMRequestError) and exc.retryable,
+            sleep=lambda delay: time.sleep(delay),
+        )
+        self._circuit_breaker = CircuitBreaker(
+            failure_threshold=max(1, int(getattr(config, "api_circuit_failure_threshold", 5))),
+            recovery_timeout=float(getattr(config, "api_circuit_recovery_seconds", 60.0)),
+        )
+        min_interval = float(getattr(config, "api_min_interval_seconds", 0.0))
+        self._rate_limiter = (
+            TokenBucketRateLimiter(rate=1.0 / min_interval, capacity=1.0)
+            if min_interval > 0
+            else None
+        )
 
     def generate_reply(
         self,
@@ -225,21 +254,61 @@ class LLMClient:
             return base_url
         return f"{base_url}/chat/completions"
 
+    @staticmethod
+    def _read_http_error_body(exc: error.HTTPError) -> str:
+        try:
+            raw = exc.read()
+        except Exception:
+            return ""
+        if isinstance(raw, bytes):
+            return raw.decode("utf-8", errors="ignore")
+        return str(raw)
+
     def _post_json(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = request.Request(url=url, data=data, headers=headers, method="POST")
+        return self._circuit_breaker.call(
+            lambda: self._retry_policy.call(
+                lambda: self._open_json_request(req, url),
+                delay_override=lambda exc, retry_number, default: getattr(exc, "retry_after", None),
+            )
+        )
+
+    def _open_json_request(self, req: request.Request, url: str) -> dict[str, Any]:
+        if self._rate_limiter is not None:
+            self._rate_limiter.acquire()
         try:
             with request.urlopen(req, timeout=self.config.request_timeout) as resp:
                 raw = resp.read().decode("utf-8")
         except error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"HTTP {exc.code} when calling {url}: {body}") from exc
-        except error.URLError as exc:
-            raise RuntimeError(
-                f"Failed to call {url}: {exc}. Run `python main.py doctor` to check your LLM settings."
+            body = self._read_http_error_body(exc)
+            raise LLMRequestError(
+                f"HTTP {exc.code} when calling {url}: {body}",
+                retryable=exc.code in RETRYABLE_HTTP_STATUS,
+                retry_after=self._retry_after_seconds(exc),
             ) from exc
-
+        except (error.URLError, TimeoutError, OSError) as exc:
+            raise LLMRequestError(
+                f"Failed to call {url}: {exc}. Run `python main.py doctor` to check your LLM settings.",
+                retryable=True,
+            ) from exc
         try:
             return json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"Invalid JSON response from {url}: {raw[:500]}") from exc
+            raise LLMRequestError(
+                f"Invalid JSON response from {url}: {raw[:500]}",
+                retryable=True,
+            ) from exc
+
+    @staticmethod
+    def _retry_after_seconds(exc: error.HTTPError) -> float | None:
+        headers = getattr(exc, "headers", None)
+        if headers is None:
+            return None
+        value = headers.get("Retry-After")
+        if value is None:
+            return None
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            return None

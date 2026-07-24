@@ -1,0 +1,42 @@
+{
+	email {$ACME_EMAIL}
+	admin off
+}
+
+{$CENTER_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+	}
+
+	reverse_proxy center:8790 {
+        health_uri /readyz
+		health_interval 15s
+		health_timeout 5s
+		health_status 2xx
+
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 130s
+		}
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}
+
+# Container-local proxy check. Port 2015 is not published by Compose.
+http://127.0.0.1:2015 {
+	route {
+		@health path /health
+		reverse_proxy @health center:8790
+		respond 404
+	}
+}
