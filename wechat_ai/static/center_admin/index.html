@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>微信客服中心</title>
+  <link rel="stylesheet" href="/admin/app.css">
+  <script src="/admin/app.js" defer></script>
+</head>
+<body>
+  <main id="login-screen" class="login-screen">
+    <section class="login-panel" aria-labelledby="login-title">
+      <div class="brand-row">
+        <span class="brand-mark" aria-hidden="true">WA</span>
+        <div>
+          <p class="eyebrow">CENTER ADMIN</p>
+          <h1 id="login-title">微信客服中心</h1>
+        </div>
+      </div>
+      <form id="login-form" class="stack-form">
+        <label>
+          <span>Center URL</span>
+          <input id="center-url" name="center_url" type="url" placeholder="同源" autocomplete="url">
+        </label>
+        <label>
+          <span>租户 ID</span>
+          <input id="tenant-id" name="tenant_id" type="text" autocomplete="username" required>
+        </label>
+        <label>
+          <span>租户 API Key</span>
+          <input id="api-key" name="api_key" type="password" autocomplete="current-password" required>
+        </label>
+        <p id="login-error" class="form-error" role="alert" hidden></p>
+        <button class="button button-primary" type="submit">登录</button>
+      </form>
+    </section>
+  </main>
+
+  <div id="app-shell" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <span class="brand-mark" aria-hidden="true">WA</span>
+        <div>
+          <strong>微信客服中心</strong>
+          <span id="tenant-label">未连接</span>
+        </div>
+      </div>
+      <nav class="primary-nav" aria-label="主导航">
+        <button class="nav-item is-active" type="button" data-view="overview" aria-current="page">概览</button>
+        <button class="nav-item" type="button" data-view="messages">消息</button>
+        <button class="nav-item" type="button" data-view="reply-jobs">AI 任务</button>
+        <button class="nav-item" type="button" data-view="deliveries">发送任务</button>
+        <button class="nav-item" type="button" data-view="contacts">联系人策略</button>
+        <button class="nav-item" type="button" data-view="friend-requests">好友申请</button>
+        <button class="nav-item" type="button" data-view="operation-jobs">运营任务</button>
+        <button class="nav-item" type="button" data-view="operation-settings">运营设置</button>
+        <button class="nav-item" type="button" data-view="settings">配置</button>
+        <button class="nav-item" type="button" data-view="audit">审计</button>
+      </nav>
+      <div class="sidebar-footer">
+        <span id="session-role">-</span>
+        <button id="logout-button" class="text-button" type="button">退出</button>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div>
+          <p id="view-eyebrow" class="eyebrow">OPERATIONS</p>
+          <h1 id="view-title">概览</h1>
+        </div>
+        <div class="topbar-actions">
+          <span id="connection-status" class="connection-status">已连接</span>
+          <button id="refresh-button" class="button button-secondary" type="button">刷新</button>
+        </div>
+      </header>
+
+      <div id="global-error" class="global-error" role="alert" hidden></div>
+
+      <main class="content">
+        <section id="view-overview" class="view" data-view-panel="overview" aria-labelledby="view-title">
+          <div class="view-state" role="status" hidden></div>
+          <div class="metric-grid" aria-label="运行指标">
+            <article class="metric"><span>已载入消息</span><strong id="metric-messages">0</strong></article>
+            <article class="metric"><span>待处理 AI（已载入）</span><strong id="metric-replies">0</strong></article>
+            <article class="metric"><span>发送异常</span><strong id="metric-deliveries">0</strong></article>
+            <article class="metric"><span>在线 Agent</span><strong id="metric-agents">0</strong></article>
+          </div>
+
+          <section class="section-block" aria-labelledby="tenant-heading">
+            <div class="section-heading"><h2 id="tenant-heading">租户</h2></div>
+            <dl id="tenant-details" class="detail-grid"></dl>
+          </section>
+
+          <section class="section-block" aria-labelledby="channels-heading">
+            <div class="section-heading"><h2 id="channels-heading">渠道账号</h2></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>名称</th><th>渠道</th><th>外部账号</th><th>状态</th></tr></thead>
+                <tbody id="overview-channels"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="section-block" aria-labelledby="agents-heading">
+            <div class="section-heading"><h2 id="agents-heading">Windows Agent</h2></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>名称</th><th>Agent ID</th><th>状态</th><th>版本 / 更新</th><th>最近心跳</th></tr></thead>
+                <tbody id="overview-agents"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section id="view-messages" class="view" data-view-panel="messages" hidden>
+          <div class="view-toolbar">
+            <div><h2>消息记录</h2><span id="message-count" class="muted">0 条</span></div>
+          </div>
+          <div class="view-state" role="status" hidden></div>
+          <div class="section-block table-wrap">
+            <table>
+              <thead><tr><th>时间</th><th>方向</th><th>会话</th><th>内容</th><th>渠道账号</th></tr></thead>
+              <tbody id="messages-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="view-reply-jobs" class="view" data-view-panel="reply-jobs" hidden>
+          <div class="view-toolbar">
+            <div><h2>AI 回复任务</h2><span id="reply-count" class="muted">0 条</span></div>
+            <label class="compact-field"><span>状态</span><select id="reply-status"><option value="">全部</option><option value="queued">排队</option><option value="processing">处理中</option><option value="generated">已生成</option><option value="failed">失败</option></select></label>
+          </div>
+          <div class="view-state" role="status" hidden></div>
+          <div class="section-block table-wrap">
+            <table>
+              <thead><tr><th>创建时间</th><th>状态</th><th>尝试</th><th>来源消息</th><th>发送任务</th><th>错误</th></tr></thead>
+              <tbody id="reply-jobs-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="view-deliveries" class="view" data-view-panel="deliveries" hidden>
+          <section class="section-block" aria-labelledby="manual-delivery-heading">
+            <div class="section-heading"><h2 id="manual-delivery-heading">人工发送</h2></div>
+            <form id="delivery-form" class="inline-form">
+              <label><span>渠道账号</span><select id="delivery-channel" required></select></label>
+              <label><span>会话 ID</span><input id="delivery-conversation" list="conversation-options" required></label>
+              <datalist id="conversation-options"></datalist>
+              <label class="field-grow"><span>发送内容</span><textarea id="delivery-content" rows="2" required></textarea></label>
+              <button class="button button-primary align-end" type="submit">创建任务</button>
+            </form>
+          </section>
+          <div class="view-toolbar">
+            <div><h2>发送任务</h2><span id="delivery-count" class="muted">0 条</span></div>
+            <label class="compact-field"><span>状态</span><select id="delivery-status"><option value="">全部</option><option value="queued">排队</option><option value="claimed">已领取</option><option value="sending">发送中</option><option value="completed">已完成</option><option value="failed">失败</option><option value="uncertain">待确认</option></select></label>
+          </div>
+          <div class="view-state" role="status" hidden></div>
+          <div class="section-block table-wrap">
+            <table>
+              <thead><tr><th>创建时间</th><th>状态</th><th>会话</th><th>内容</th><th>尝试</th><th>错误</th><th>操作</th></tr></thead>
+              <tbody id="deliveries-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="view-contacts" class="view" data-view-panel="contacts" hidden>
+          <div class="view-toolbar toolbar-wrap">
+            <div><h2>联系人策略</h2><span id="contact-count" class="muted">0 个</span></div>
+            <div class="filter-row">
+              <label class="compact-field"><span>渠道</span><select id="contact-channel"></select></label>
+              <label class="compact-field search-field"><span>搜索</span><input id="contact-search" type="search" placeholder="昵称、备注或微信标识"></label>
+              <label class="compact-field"><span>类型</span><select id="contact-type-filter"><option value="">全部</option><option value="friend">好友</option><option value="group">群聊</option></select></label>
+              <label class="compact-field"><span>策略</span><select id="contact-policy-filter"><option value="">全部</option><option value="ai_auto">AI 自动回复</option><option value="manual">仅人工</option><option value="paused">暂停</option><option value="blocked">屏蔽</option></select></label>
+            </div>
+          </div>
+          <form id="contact-batch-form" class="batch-bar" hidden>
+            <strong><span id="contact-selected-count">0</span> 个已选择</strong>
+            <label class="compact-field"><span>回复策略</span><select id="contact-batch-policy" required><option value="ai_auto">AI 自动回复</option><option value="manual">仅人工</option><option value="paused">暂停</option><option value="blocked">屏蔽</option></select></label>
+            <label class="compact-field"><span>欢迎语</span><select id="contact-batch-welcome"><option value="keep">保持不变</option><option value="on">开启</option><option value="off">关闭</option></select></label>
+            <button class="button button-primary button-small" type="submit">应用到选中项</button>
+          </form>
+          <div class="view-state" role="status" hidden></div>
+          <div class="section-block table-wrap">
+            <table class="operations-table">
+              <thead><tr><th class="select-cell"><input id="contacts-select-all" type="checkbox" aria-label="选择当前页全部联系人"></th><th>联系人</th><th>类型</th><th>微信标识</th><th>同步状态</th><th>回复策略</th><th>欢迎语</th><th>最近同步</th><th>操作</th></tr></thead>
+              <tbody id="contacts-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="view-friend-requests" class="view" data-view-panel="friend-requests" hidden>
+          <div class="view-toolbar toolbar-wrap">
+            <div><h2>好友申请</h2><span id="friend-request-count" class="muted">0 个待处理</span></div>
+            <label class="compact-field"><span>渠道</span><select id="friend-request-channel"></select></label>
+          </div>
+          <section class="section-block action-panel" aria-labelledby="friend-actions-heading">
+            <div class="section-heading"><div><h2 id="friend-actions-heading">批量处理</h2><span id="friend-request-selected-count" class="muted">已选择 0 个</span></div></div>
+            <div class="operation-controls">
+              <label><span>本批数量</span><input id="friend-request-batch-size" type="number" min="1" max="100" value="10"></label>
+              <label class="toggle-field"><input id="friend-request-welcome" type="checkbox" checked><span>通过后发送欢迎语</span></label>
+              <label class="toggle-field"><input id="friend-request-auto-reply" type="checkbox"><span>通过后启用 AI 回复</span></label>
+            </div>
+            <div class="action-row action-row-spaced">
+              <button id="friend-approve-selected" class="button button-primary" type="button" disabled>通过选中</button>
+              <button id="friend-reject-selected" class="button button-danger-outline" type="button" disabled>拒绝选中</button>
+              <button id="friend-approve-batch" class="button button-secondary" type="button">通过本批</button>
+              <button id="friend-approve-all" class="button button-danger" type="button">全部加入受限队列</button>
+            </div>
+          </section>
+          <div class="view-state" role="status" hidden></div>
+          <div class="section-block table-wrap">
+            <table class="operations-table">
+              <thead><tr><th class="select-cell"><input id="friend-requests-select-all" type="checkbox" aria-label="选择当前页全部好友申请"></th><th>申请人</th><th>验证消息</th><th>微信标识</th><th>申请时间</th><th>状态</th></tr></thead>
+              <tbody id="friend-requests-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="view-operation-jobs" class="view" data-view-panel="operation-jobs" hidden>
+          <div class="view-toolbar toolbar-wrap">
+            <div><h2>运营任务</h2><span id="operation-job-count" class="muted">0 个</span></div>
+            <div class="filter-row">
+              <label class="compact-field"><span>渠道</span><select id="operation-job-channel"></select></label>
+              <label class="compact-field"><span>状态</span><select id="operation-job-status"><option value="">全部</option><option value="queued">排队</option><option value="claimed">已领取</option><option value="executing">执行中</option><option value="succeeded">成功</option><option value="failed">失败</option><option value="uncertain">待确认</option><option value="cancelled">已取消</option></select></label>
+            </div>
+          </div>
+          <div class="view-state" role="status" hidden></div>
+          <div class="section-block table-wrap">
+            <table class="operations-table">
+              <thead><tr><th>创建时间</th><th>任务</th><th>目标</th><th>状态</th><th>尝试</th><th>错误</th><th>最近更新</th><th>操作</th></tr></thead>
+              <tbody id="operation-jobs-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="view-operation-settings" class="view" data-view-panel="operation-settings" hidden>
+          <div class="view-toolbar toolbar-wrap">
+            <div><h2>运营设置</h2><span class="muted">按微信渠道独立生效</span></div>
+            <label class="compact-field"><span>渠道</span><select id="operation-settings-channel"></select></label>
+          </div>
+          <div class="view-state" role="status" hidden></div>
+          <section class="section-block" aria-labelledby="operation-limits-heading">
+            <div class="section-heading status-heading">
+              <div><h2 id="operation-limits-heading">执行限制</h2><span id="operation-paused-status" class="muted">状态未加载</span></div>
+              <div class="action-row"><button id="operation-pause" class="button button-danger-outline" type="button">暂停运营</button><button id="operation-resume" class="button button-secondary" type="button">恢复运营</button></div>
+            </div>
+            <form id="operation-limits-form" class="form-grid limit-form">
+              <label><span>每批数量</span><input id="operation-batch-size" type="number" min="1" max="100" required></label>
+              <label><span>操作最小间隔（秒）</span><input id="operation-min-interval" type="number" min="1" max="86400" required></label>
+              <label><span>每小时上限</span><input id="operation-max-hour" type="number" min="1" max="10000" required></label>
+              <label><span>每日上限</span><input id="operation-max-day" type="number" min="1" max="100000" required></label>
+              <label class="field-span"><span>欢迎语</span><textarea id="operation-welcome-message" rows="5" maxlength="2000" placeholder="留空则不发送欢迎语"></textarea></label>
+              <label class="toggle-field"><input id="operation-auto-enable" type="checkbox"><span>新好友通过后自动启用 AI 回复</span></label>
+              <label class="toggle-field"><input id="operation-paused" type="checkbox"><span>暂停全部微信运营任务</span></label>
+              <div class="form-actions field-span"><button class="button button-primary" type="submit">保存运营设置</button></div>
+            </form>
+          </section>
+        </section>
+
+        <section id="view-settings" class="view" data-view-panel="settings" hidden>
+          <div class="settings-grid">
+            <section class="section-block" aria-labelledby="profile-heading">
+              <div class="section-heading"><h2 id="profile-heading">机器人配置</h2></div>
+              <form id="profile-form" class="form-grid">
+                <label><span>配置名称</span><input id="profile-name" value="default" required></label>
+                <label class="toggle-field"><input id="profile-enabled" type="checkbox"><span>启用 AI 回复</span></label>
+                <label class="field-span"><span>系统提示词</span><textarea id="profile-prompt" rows="7" required></textarea></label>
+                <label><span>AI 类型</span><select id="profile-provider"><option value="openai_compatible">OpenAI Compatible</option><option value="ollama">Ollama</option></select></label>
+                <label><span>模型</span><input id="profile-model" required></label>
+                <label class="field-span"><span>API Base URL</span><input id="profile-base-url" type="url" required></label>
+                <label><span>凭据名称</span><input id="profile-credential-name" value="default" required></label>
+                <label><span>请求超时（秒）</span><input id="profile-timeout" type="number" min="1" value="30" required></label>
+                <label><span>上下文消息数</span><input id="profile-context" type="number" min="1" value="20" required></label>
+                <div class="form-actions field-span"><button class="button button-primary" type="submit">保存机器人配置</button></div>
+              </form>
+            </section>
+
+            <section class="section-block" aria-labelledby="credential-heading">
+              <div class="section-heading"><h2 id="credential-heading">AI 凭据</h2></div>
+              <form id="credential-form" class="stack-form compact-stack">
+                <label><span>凭据名称</span><input id="credential-name" value="default" required></label>
+                <label><span>API Key</span><input id="credential-value" type="password" autocomplete="new-password" required></label>
+                <button class="button button-primary" type="submit">更新凭据</button>
+              </form>
+            </section>
+
+            <section class="section-block field-wide" aria-labelledby="knowledge-heading">
+              <div class="section-heading"><h2 id="knowledge-heading">知识库</h2><span id="knowledge-count" class="muted">0 / 20000</span></div>
+              <form id="knowledge-form" class="form-grid">
+                <label><span>知识库名称</span><input id="knowledge-name" value="default" required></label>
+                <label><span>状态</span><select id="knowledge-status"><option value="active">启用</option><option value="disabled">停用</option></select></label>
+                <label class="field-span"><span>文本内容</span><textarea id="knowledge-content" rows="14" maxlength="20000"></textarea></label>
+                <div class="form-actions field-span"><button class="button button-primary" type="submit">保存知识库</button></div>
+              </form>
+            </section>
+          </div>
+          <div class="view-state" role="status" hidden></div>
+        </section>
+
+        <section id="view-audit" class="view" data-view-panel="audit" hidden>
+          <div class="view-toolbar"><div><h2>审计记录</h2><span id="audit-count" class="muted">0 条</span></div></div>
+          <div class="view-state" role="status" hidden></div>
+          <div class="section-block table-wrap">
+            <table>
+              <thead><tr><th>时间</th><th>动作</th><th>操作者</th><th>对象</th><th>详情</th></tr></thead>
+              <tbody id="audit-body"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="resolve-dialog">
+    <form id="resolve-form" method="dialog" class="dialog-form">
+      <div class="dialog-heading"><h2>处理待确认任务</h2><button id="resolve-close" class="close-button" type="button" aria-label="关闭">×</button></div>
+      <input id="resolve-delivery-id" type="hidden">
+      <label><span>处理结果</span><select id="resolve-resolution"><option value="sent">确认已发送</option><option value="failed">标记失败</option><option value="retry">重新排队</option></select></label>
+      <label><span>处理备注</span><textarea id="resolve-note" rows="4" required></textarea></label>
+      <div class="dialog-actions"><button class="button button-secondary" id="resolve-cancel" type="button">取消</button><button class="button button-primary" type="submit">确认</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="operation-resolve-dialog">
+    <form id="operation-resolve-form" method="dialog" class="dialog-form">
+      <div class="dialog-heading"><h2>确认运营任务结果</h2><button id="operation-resolve-close" class="close-button" type="button" aria-label="关闭">×</button></div>
+      <input id="operation-resolve-id" type="hidden">
+      <label><span>实际结果</span><select id="operation-resolution"><option value="succeeded">确认已成功</option><option value="failed">确认失败</option><option value="cancelled">确认未执行并取消</option></select></label>
+      <label><span>处理备注</span><textarea id="operation-resolve-note" rows="4" maxlength="1000" required></textarea></label>
+      <div class="dialog-actions"><button class="button button-secondary" id="operation-resolve-cancel" type="button">取消</button><button class="button button-primary" type="submit">提交确认</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog">
+    <form id="confirm-form" method="dialog" class="dialog-form">
+      <div class="dialog-heading"><h2 id="confirm-title">确认操作</h2><button id="confirm-close" class="close-button" type="button" aria-label="关闭">×</button></div>
+      <p id="confirm-message" class="dialog-message"></p>
+      <div class="dialog-actions"><button class="button button-secondary" id="confirm-cancel" type="button">取消</button><button class="button button-danger" id="confirm-submit" type="submit">确认</button></div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

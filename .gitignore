@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.env
+.env.center
+.env.production
+.venv/
+build/
+data/
+logs/
+wxauto_logs/
+reports/
+.coordinated-restore.lock/
+data/image-captures/
+.pytest_cache/
+.test-tmp/
+.idea/workspace.xml
