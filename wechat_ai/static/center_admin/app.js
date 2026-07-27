@@ -95,8 +95,16 @@
     }
   }
 
+  function defaultCenterUrl() {
+    const path = window.location.pathname.replace(/\/+$/, "");
+    const adminMarker = "/admin";
+    const markerIndex = path.lastIndexOf(adminMarker);
+    const prefix = markerIndex >= 0 ? path.slice(0, markerIndex) : "";
+    return `${window.location.origin}${prefix}`;
+  }
+
   function normalizeCenterUrl(value) {
-    const candidate = String(value || "").trim() || window.location.origin;
+    const candidate = String(value || "").trim() || defaultCenterUrl();
     const parsed = new URL(candidate, window.location.href);
     if (!(["http:", "https:"].includes(parsed.protocol))) {
       throw new Error("Center URL 必须使用 HTTP 或 HTTPS");

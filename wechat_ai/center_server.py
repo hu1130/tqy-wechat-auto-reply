@@ -1108,7 +1108,7 @@ def build_center_wsgi_application(application: CenterApplication) -> Callable[..
         query = str(environ.get("QUERY_STRING") or "")
         target = f"{path}?{query}" if query else path
         headers = _wsgi_headers(environ)
-        asset = _center_admin_asset(method, target)
+        asset = _center_admin_asset(method, target, headers)
         if asset is not None:
             status_code, content_type, encoded = asset
             start_response(
@@ -1189,7 +1189,7 @@ def _read_wsgi_json(environ: Mapping[str, Any]) -> dict[str, Any]:
 def build_center_handler(application: CenterApplication) -> type[BaseHTTPRequestHandler]:
     class CenterHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            asset = _center_admin_asset(self.command, self.path)
+            asset = _center_admin_asset(self.command, self.path, self.headers)
             if asset is not None:
                 self._send_asset(*asset)
                 return
@@ -1257,12 +1257,20 @@ def build_center_handler(application: CenterApplication) -> type[BaseHTTPRequest
     return CenterHandler
 
 
-def _center_admin_asset(method: str, target: str) -> tuple[int, str, bytes] | None:
+def _center_admin_asset(
+    method: str,
+    target: str,
+    headers: Mapping[str, Any] | None = None,
+) -> tuple[int, str, bytes] | None:
     path = urlparse(target).path.rstrip("/") or "/"
     if method != "GET" or (path != "/" and path != "/admin" and not path.startswith("/admin/")):
         return None
     try:
-        content_type, body = read_center_admin_asset(target)
+        public_prefix = str((headers or {}).get("X-Forwarded-Prefix") or "")
+        content_type, body = read_center_admin_asset(
+            target,
+            public_prefix=public_prefix,
+        )
     except (FileNotFoundError, OSError):
         return 404, "text/plain; charset=utf-8", b"Not found"
     return 200, content_type, body

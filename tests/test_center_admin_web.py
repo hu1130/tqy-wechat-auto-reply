@@ -29,6 +29,17 @@ class CenterAdminWebTests(unittest.TestCase):
         self.assertIn("微信客服中心", decoded)
         self.assertIn('id="login-form"', decoded)
 
+    def test_admin_index_rewrites_assets_for_forwarded_prefix(self) -> None:
+        _, body = read_center_admin_asset(
+            "/admin",
+            public_prefix="/wechat-center",
+        )
+
+        decoded = body.decode("utf-8")
+        self.assertIn('href="/wechat-center/admin/app.css"', decoded)
+        self.assertIn('src="/wechat-center/admin/app.js"', decoded)
+        self.assertNotIn('href="/admin/app.css"', decoded)
+
     def test_known_assets_have_explicit_mime_types(self) -> None:
         css_type, css = read_center_admin_asset("/admin/app.css")
         js_type, js = read_center_admin_asset("app.js")
@@ -42,6 +53,8 @@ class CenterAdminWebTests(unittest.TestCase):
     def test_frontend_declares_all_required_api_routes(self) -> None:
         script = read_center_admin_asset("/admin/app.js")[1].decode("utf-8")
 
+        self.assertIn("function defaultCenterUrl()", script)
+        self.assertIn('const adminMarker = "/admin"', script)
         for route in (
             "/v1/session",
             "/v1/tenant",

@@ -545,6 +545,31 @@ class CenterApplicationTests(unittest.TestCase):
         self.assertIn("default-src 'self'", headers["Content-Security-Policy"])
         self.assertIn("login-form", body.decode("utf-8"))
 
+    def test_wsgi_admin_uses_forwarded_prefix_for_browser_assets(self) -> None:
+        wsgi = build_center_wsgi_application(self.app)
+        captured: dict[str, object] = {}
+
+        def start_response(status: str, headers: list[tuple[str, str]]) -> None:
+            captured["status"] = status
+            captured["headers"] = dict(headers)
+
+        body = b"".join(
+            wsgi(
+                {
+                    "REQUEST_METHOD": "GET",
+                    "PATH_INFO": "/admin",
+                    "QUERY_STRING": "",
+                    "HTTP_X_FORWARDED_PREFIX": "/wechat-center",
+                    "wsgi.input": BytesIO(),
+                },
+                start_response,
+            )
+        ).decode("utf-8")
+
+        self.assertEqual(captured["status"], "200 OK")
+        self.assertIn('href="/wechat-center/admin/app.css"', body)
+        self.assertIn('src="/wechat-center/admin/app.js"', body)
+
     def test_production_server_uses_waitress_with_bounded_request_body(self) -> None:
         with patch("waitress.serve") as serve:
             run_center_production_server(
