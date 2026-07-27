@@ -99,7 +99,7 @@ class Wxauto4WeChatAdapter:
             from wxauto4 import WeChat
         except ImportError as exc:
             raise RuntimeError("wxauto4 is not installed.") from exc
-        self.wx = WeChat(ads=False, resize=False)
+        self.wx = WeChat(ads=False, resize=True)
 
     def status(self) -> WeChatAdapterStatus:
         self.connect()
@@ -209,7 +209,10 @@ class Wxauto4WeChatAdapter:
         """Scan the contacts UI and enrich it with wxauto4 session metadata."""
 
         self.connect()
-        contacts = scan_channel_contacts(wechat=self.wx)
+        try:
+            contacts = scan_channel_contacts(wechat=self.wx)
+        finally:
+            self._restore_chat_view()
         sessions_by_name: dict[str, tuple[Any, dict[str, Any]]] = {}
         for session in self.get_sessions():
             info = getattr(session, "info", None)
@@ -273,7 +276,10 @@ class Wxauto4WeChatAdapter:
 
     def snapshot_friend_requests(self) -> list[dict[str, Any]]:
         self.connect()
-        return [item.to_dict() for item in scan_friend_requests(wechat=self.wx)]
+        try:
+            return [item.to_dict() for item in scan_friend_requests(wechat=self.wx)]
+        finally:
+            self._restore_chat_view()
 
     def execute_operation(self, operation_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         self.connect()
@@ -281,11 +287,14 @@ class Wxauto4WeChatAdapter:
             request_id = str(payload.get("external_request_id") or "").strip()
             if not request_id:
                 raise ValueError("friend operation payload requires external_request_id")
-            result = execute_friend_request_action(
-                request_id,
-                operation_type,
-                wechat=self.wx,
-            )
+            try:
+                result = execute_friend_request_action(
+                    request_id,
+                    operation_type,
+                    wechat=self.wx,
+                )
+            finally:
+                self._restore_chat_view()
             return {
                 "external_request_id": result.external_request_id,
                 "operation_type": result.operation_type,
@@ -310,6 +319,12 @@ class Wxauto4WeChatAdapter:
                 "evidence": {"conversation_external_id": conversation_id},
             }
         raise ValueError(f"unsupported WeChat operation type: {operation_type}")
+
+    def _restore_chat_view(self) -> None:
+        switch_to_chat = getattr(self.wx, "SwitchToChat", None)
+        if not callable(switch_to_chat):
+            raise RuntimeError("wxauto4 does not expose SwitchToChat.")
+        switch_to_chat()
 
     def session_name(self, session: Any) -> str:
         return self._session_name(session)
@@ -336,10 +351,22 @@ class Wxauto4WeChatAdapter:
             image_download=False,
             listener_api=callable(getattr(wx, "AddListenChat", None)) and callable(getattr(wx, "KeepRunning", None)),
             polling_api=all(callable(getattr(wx, name, None)) for name in ("ChatWith", "GetAllMessage", "SendMsg")),
-            contact_snapshot=callable(getattr(wx, "SwitchToContact", None)),
-            friend_request_scan=callable(getattr(wx, "SwitchToContact", None)),
-            friend_request_accept=callable(getattr(wx, "SwitchToContact", None)),
-            friend_request_reject=callable(getattr(wx, "SwitchToContact", None)),
+            contact_snapshot=all(
+                callable(getattr(wx, name, None))
+                for name in ("SwitchToContact", "SwitchToChat")
+            ),
+            friend_request_scan=all(
+                callable(getattr(wx, name, None))
+                for name in ("SwitchToContact", "SwitchToChat")
+            ),
+            friend_request_accept=all(
+                callable(getattr(wx, name, None))
+                for name in ("SwitchToContact", "SwitchToChat")
+            ),
+            friend_request_reject=all(
+                callable(getattr(wx, name, None))
+                for name in ("SwitchToContact", "SwitchToChat")
+            ),
         )
 
     @staticmethod

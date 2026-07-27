@@ -41,18 +41,26 @@ class FakeSession:
 
 
 class FakeMessage:
-    def __init__(self, content: str, sender: str = "alice", msg_type: str = "text", msg_id: str = "") -> None:
+    def __init__(
+        self,
+        content: str,
+        sender: str = "alice",
+        msg_type: str = "text",
+        msg_id: str = "",
+        attr: str = "",
+    ) -> None:
         self.content = content
         self.sender = sender
         self.type = msg_type
         self.id = msg_id
-        self.attr = ""
+        self.attr = attr
 
 
 class FakeWx:
     client_version = "4.1.8.107"
     def __init__(self) -> None:
         self.current_chat = ""
+        self.current_view = "chat"
         self.sent: list[tuple[str, str]] = []
         self.sessions = [FakeSession("KiraAI", "hello", isnew=True, new_count=1)]
         self.messages: dict[str, list[FakeMessage]] = {
@@ -78,7 +86,10 @@ class FakeWx:
         self.sent.append((self.current_chat, content))
 
     def SwitchToContact(self) -> None:
-        return None
+        self.current_view = "contacts"
+
+    def SwitchToChat(self) -> None:
+        self.current_view = "chat"
 
 
 class FakeNoContactsWx(FakeWx):
@@ -475,9 +486,9 @@ class ConnectorProtocolTests(unittest.TestCase):
         wx = FakeWx()
         connector = WeChatDesktopConnector(wx=wx, connector_id="pc-1")
 
-        with patch(
-            "wechat_ai.connectors.wechat_adapters.wxauto4_adapter.scan_channel_contacts",
-            return_value=[
+        def scan_contacts(*, wechat: FakeWx) -> list[dict[str, object]]:
+            wechat.SwitchToContact()
+            return [
                 {
                     "external_contact_id": "wxc_ui",
                     "display_name": "KiraAI",
@@ -486,7 +497,11 @@ class ConnectorProtocolTests(unittest.TestCase):
                     "status": "active",
                     "raw": {"source": "wechat_contacts_ui", "identity_quality": "automation_id"},
                 }
-            ],
+            ]
+
+        with patch(
+            "wechat_ai.connectors.wechat_adapters.wxauto4_adapter.scan_channel_contacts",
+            side_effect=scan_contacts,
         ):
             contacts = connector.snapshot_contacts()
 
@@ -495,6 +510,24 @@ class ConnectorProtocolTests(unittest.TestCase):
         self.assertEqual(contacts[0]["kind"], "friend")
         self.assertEqual(contacts[0]["raw"]["source"], "wechat_contacts_ui+wxauto4_sessions")
         self.assertEqual(contacts[0]["raw"]["identity_quality"], "automation_id")
+        self.assertEqual(wx.current_view, "chat")
+
+    def test_friend_request_snapshot_restores_chat_view(self) -> None:
+        wx = FakeWx()
+        connector = WeChatDesktopConnector(wx=wx, connector_id="pc-1")
+
+        def scan_requests(*, wechat: FakeWx) -> list[object]:
+            wechat.SwitchToContact()
+            return []
+
+        with patch(
+            "wechat_ai.connectors.wechat_adapters.wxauto4_adapter.scan_friend_requests",
+            side_effect=scan_requests,
+        ):
+            requests = connector.snapshot_friend_requests()
+
+        self.assertEqual(requests, [])
+        self.assertEqual(wx.current_view, "chat")
 
     def test_friend_operation_fails_before_ui_when_adapter_capability_is_missing(self) -> None:
         wx = FakeNoContactsWx()
@@ -528,6 +561,12 @@ class ConnectorProtocolTests(unittest.TestCase):
         wx = FakeWx()
         connector = WeChatDesktopConnector(wx=wx, connector_id="pc-1", scan_all_sessions=True)
         connector.seed()
+        wx.messages["KiraAI"].append(
+            FakeMessage("agent reply", sender="operator", msg_id="self-1", attr="self")
+        )
+        wx.messages["KiraAI"].append(
+            FakeMessage("system notice", sender="system", msg_id="system-1", attr="system")
+        )
         wx.messages["KiraAI"].append(FakeMessage("new question", msg_id="new-1"))
         wx.sessions = [FakeSession("KiraAI", "new question", isnew=True, new_count=1)]
 

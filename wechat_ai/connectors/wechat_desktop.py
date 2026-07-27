@@ -215,6 +215,9 @@ class WeChatDesktopConnector:
             if key in self.seen[chat_name]:
                 continue
             self.seen[chat_name].add(key)
+            message_attr = str(getattr(msg, "attr", "")).strip().lower()
+            if message_attr in {"self", "system"}:
+                continue
             content = self.adapter.message_content(msg)
             if not content:
                 continue
@@ -229,7 +232,7 @@ class WeChatDesktopConnector:
                     message_type=msg_type,
                     content=content,
                     message_id=key,
-                    raw={"attr": str(getattr(msg, "attr", "")), "received_at": time.time()},
+                    raw={"attr": message_attr, "received_at": time.time()},
                 )
             )
         return inbound
