@@ -278,8 +278,6 @@ class CenterConnectorAgent:
         stats["completed"] += self._flush_delivery_results()
         stats["operations_completed"] += self._flush_operation_results()
 
-        stats["contacts_synced"] += self._maybe_sync_contacts()
-        stats["friend_requests_synced"] += self._maybe_sync_friend_requests()
         try:
             commands = self.client.claim_deliveries(self.claim_limit)
         except RuntimeError as exc:
@@ -299,6 +297,9 @@ class CenterConnectorAgent:
                 self.spool.enqueue_operation(operation)
             stats["operations_claimed"] += len(operations)
             stats["operations_completed"] += self._process_claimed_operations()
+
+        stats["contacts_synced"] += self._maybe_sync_contacts()
+        stats["friend_requests_synced"] += self._maybe_sync_friend_requests()
         return stats
 
     def _report_heartbeat(self, status: Any) -> None:

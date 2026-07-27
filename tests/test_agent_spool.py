@@ -416,6 +416,31 @@ class AgentSpoolTests(unittest.TestCase):
             self.assertTrue(client.friend_request_snapshots[0].requests[0].requested_at)
             spool.close()
 
+    def test_runner_sends_reply_before_ui_maintenance_snapshots(self) -> None:
+        class ReplyPriorityConnector(SnapshotConnector):
+            sent_before_contact_sync = -1
+            sent_before_friend_request_sync = -1
+
+            def snapshot_contacts(self) -> list[dict[str, object]]:
+                self.sent_before_contact_sync = len(self.sent)
+                return super().snapshot_contacts()
+
+            def snapshot_friend_requests(self) -> list[dict[str, object]]:
+                self.sent_before_friend_request_sync = len(self.sent)
+                return super().snapshot_friend_requests()
+
+        with tempfile.TemporaryDirectory() as directory:
+            spool = AgentSpool(Path(directory) / "spool.sqlite3")
+            connector = ReplyPriorityConnector()
+            client = FakeClient()
+            agent = CenterConnectorAgent(connector, client, spool)
+
+            agent.run_once()
+
+            self.assertEqual(connector.sent_before_contact_sync, 1)
+            self.assertEqual(connector.sent_before_friend_request_sync, 1)
+            spool.close()
+
     def test_operation_result_is_replayed_after_center_outage_without_reexecution(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "spool.sqlite3"
