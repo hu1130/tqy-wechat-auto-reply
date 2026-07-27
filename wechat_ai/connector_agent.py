@@ -211,8 +211,9 @@ class CenterConnectorAgent:
             runtime_status_provider or packaged_updater_status
         )
         self._last_heartbeat = 0.0
-        self._last_contact_sync = 0.0
-        self._last_friend_request_sync = 0.0
+        maintenance_baseline = time.monotonic()
+        self._last_contact_sync = maintenance_baseline
+        self._last_friend_request_sync = maintenance_baseline
         self._started = False
         self._operations_allowed = False
         self._identity_status = "unavailable"
@@ -298,8 +299,13 @@ class CenterConnectorAgent:
             stats["operations_claimed"] += len(operations)
             stats["operations_completed"] += self._process_claimed_operations()
 
-        stats["contacts_synced"] += self._maybe_sync_contacts()
-        stats["friend_requests_synced"] += self._maybe_sync_friend_requests()
+        reply_activity = any(
+            stats[name] > 0
+            for name in ("captured", "reported", "claimed", "completed")
+        )
+        if not reply_activity:
+            stats["contacts_synced"] += self._maybe_sync_contacts()
+            stats["friend_requests_synced"] += self._maybe_sync_friend_requests()
         return stats
 
     def _report_heartbeat(self, status: Any) -> None:

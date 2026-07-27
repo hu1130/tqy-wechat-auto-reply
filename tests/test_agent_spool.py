@@ -407,6 +407,9 @@ class AgentSpoolTests(unittest.TestCase):
             client.claimed = True
             agent = CenterConnectorAgent(connector, client, spool)
 
+            agent.run_once()
+            agent._last_contact_sync = 0
+            agent._last_friend_request_sync = 0
             stats = agent.run_once()
 
             self.assertEqual(stats["contacts_synced"], 1)
@@ -435,8 +438,19 @@ class AgentSpoolTests(unittest.TestCase):
             client = FakeClient()
             agent = CenterConnectorAgent(connector, client, spool)
 
-            agent.run_once()
+            active_stats = agent.run_once()
 
+            self.assertEqual(active_stats["captured"], 1)
+            self.assertEqual(active_stats["completed"], 1)
+            self.assertEqual(connector.sent_before_contact_sync, -1)
+            self.assertEqual(connector.sent_before_friend_request_sync, -1)
+
+            agent._last_contact_sync = 0
+            agent._last_friend_request_sync = 0
+            idle_stats = agent.run_once()
+
+            self.assertEqual(idle_stats["contacts_synced"], 1)
+            self.assertEqual(idle_stats["friend_requests_synced"], 1)
             self.assertEqual(connector.sent_before_contact_sync, 1)
             self.assertEqual(connector.sent_before_friend_request_sync, 1)
             spool.close()
